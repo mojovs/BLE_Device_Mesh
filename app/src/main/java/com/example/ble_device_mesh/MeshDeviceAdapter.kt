@@ -29,14 +29,19 @@ class MeshDeviceAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val device = devices[position]
         
+        // 从 SharedPreferences 读取保存的亮度
+        val prefs = holder.itemView.context.getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        val savedBrightness = prefs.getInt("brightness_0x${device.address.toString(16)}", 0)
+        device.brightness = savedBrightness
+        
         holder.tvDeviceName.text = device.name
         holder.tvDeviceAddress.text = "地址: 0x${device.address.toString(16).uppercase().padStart(4, '0')}"
-        holder.tvBrightness.text = "亮度: ${device.brightness}%"
+        holder.tvBrightness.text = "亮度: ${savedBrightness}%"
         
         // 显示温度（如果有）
         if (device.temperature != null) {
             holder.tvTemperature.visibility = View.VISIBLE
-            holder.tvTemperature.text = "温度: ${String.format("%.1f", device.temperature)}°C"
+            holder.tvTemperature.text = "${String.format("%.1f", device.temperature)}°C"
         } else {
             holder.tvTemperature.visibility = View.GONE
         }

@@ -52,11 +52,31 @@ class BleConnectionManager(private val context: Context) {
         
         try {
             // 使用 TRANSPORT_LE 确保使用低功耗蓝牙
+            // autoConnect = false 表示直接连接，速度快但要求设备在广播
+            // autoConnect = true 可以用于重连，但速度慢
             bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
             Log.d("BleConnection", "connectGatt 调用成功")
         } catch (e: Exception) {
             Log.e("BleConnection", "连接异常: ${e.message}")
             listener.onError("连接异常: ${e.message}")
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    fun connect(macAddress: String, listener: ConnectionListener) {
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
+        val adapter = bluetoothManager?.adapter
+        
+        if (adapter == null) {
+            listener.onError("蓝牙适配器不可用")
+            return
+        }
+        
+        try {
+            val device = adapter.getRemoteDevice(macAddress)
+            connect(device, listener)
+        } catch (e: Exception) {
+            listener.onError("无效的 MAC 地址: $macAddress")
         }
     }
     

@@ -139,10 +139,14 @@ class BleScannerManager(private val context: Context) {
             true // Android 12 以下不需要 BLUETOOTH_CONNECT
         }
         
-        val hasLocation = ActivityCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
+        val hasLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            true // Android 12+ 使用 neverForLocation，不需要位置权限
+        } else {
+            ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        }
         
         Log.d("BleScannerManager", "权限检查 - SCAN: $hasScan, CONNECT: $hasConnect, LOCATION: $hasLocation")
         

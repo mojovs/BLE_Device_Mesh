@@ -27,6 +27,7 @@ class DeviceDetailActivity : ComponentActivity() {
     private val viewModel: MeshViewModel by viewModels()
     private lateinit var device: MeshDevice
     private lateinit var scanAdapter: DeviceAdapter
+    private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
@@ -61,6 +62,12 @@ class DeviceDetailActivity : ComponentActivity() {
         
         setupViews()
         observeViewModel()
+        
+        // 自动连接上次的 Proxy
+        if (viewModel.isConnected.value != true && viewModel.hasSavedProxyAddress()) {
+            Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
+            viewModel.connectToSavedProxy()
+        }
     }
     
     private fun setupViews() {
@@ -86,7 +93,20 @@ class DeviceDetailActivity : ComponentActivity() {
             if (viewModel.isConnected.value == true) {
                 viewModel.disconnectDevice()
             } else {
-                showProxyScanDialog()
+                if (viewModel.hasSavedProxyAddress()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("连接方式")
+                        .setMessage("发现上次连接的记录，是否直接连接？")
+                        .setPositiveButton("直接连接") { _, _ ->
+                            viewModel.connectToSavedProxy()
+                        }
+                        .setNegativeButton("扫描新设备") { _, _ ->
+                            showProxyScanDialog()
+                        }
+                        .show()
+                } else {
+                    showProxyScanDialog()
+                }
             }
         }
         
@@ -98,19 +118,29 @@ class DeviceDetailActivity : ComponentActivity() {
         """.trimIndent()
         
         // 亮度控制
-        seekBarBrightness.progress = device.brightness
-        tvBrightnessValue.text = "${device.brightness}%"
+        val savedBrightness = getSavedBrightness(device.address)
+        device.brightness = savedBrightness // Update memory object
+        seekBarBrightness.progress = savedBrightness
+        tvBrightnessValue.text = "$savedBrightness%"
         
         seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 tvBrightnessValue.text = "$progress%"
                 if (fromUser) {
+                    // 实时发送控制指令
                     viewModel.sendBrightness(device.address, progress)
                 }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                // 滑动结束时保存亮度值
+                seekBar?.progress?.let { progress ->
+                    saveBrightness(device.address, progress)
+                    device.brightness = progress
+                }
+            }
         })
         
         // 温度控制
@@ -154,6 +184,8 @@ class DeviceDetailActivity : ComponentActivity() {
                 tvTemperature.text = "${String.format("%.1f", temperature)} °C"
                 // 更新当前设备对象的缓存值
                 device.temperature = temperature
+                // 持久化保存到 Repository，以便主界面也能看到最新温度
+                deviceRepository.updateDevice(device)
             }
         }
     }
@@ -212,10 +244,10 @@ class DeviceDetailActivity : ComponentActivity() {
     
     private fun checkAndRequestPermissions() {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12+ 不需要位置权限
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.BLUETOOTH_CONNECT
             )
         } else {
             arrayOf(
@@ -235,10 +267,10 @@ class DeviceDetailActivity : ComponentActivity() {
     
     private fun hasAllPermissions(): Boolean {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12+ 不需要位置权限
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.BLUETOOTH_CONNECT
             )
         } else {
             arrayOf(
@@ -266,6 +298,17 @@ class DeviceDetailActivity : ComponentActivity() {
         }
         
         return true
+    }
+    
+    private fun saveBrightness(address: Int, brightness: Int) {
+        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putInt("brightness_0x${address.toString(16)}", brightness).apply()
+    }
+    
+    private fun getSavedBrightness(address: Int): Int {
+        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        // 默认返回 0
+        return prefs.getInt("brightness_0x${address.toString(16)}", 0)
     }
     
     private fun getDeviceTypeName(type: com.example.ble_device_mesh.data.DeviceType): String {

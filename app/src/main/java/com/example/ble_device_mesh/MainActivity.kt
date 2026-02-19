@@ -27,6 +27,9 @@ class MainActivity : ComponentActivity() {
         
         deviceRepository = DeviceRepository(this)
         
+        // 清除旧的温度数据，避免显示过期的信息
+        deviceRepository.clearAllTemperatures()
+        
         setupViews()
         loadDevices()
         startTemperaturePolling()
@@ -43,15 +46,7 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
         
-        // 手动刷新温度按钮
-        findViewById<Button>(R.id.btnRefreshTemp)?.setOnClickListener {
-            Log.d("MainActivity", "手动刷新温度")
-            val devices = deviceRepository.getAllDevices()
-            devices.forEach { device ->
-                viewModel.readTemperature(device.address)
-            }
-            Toast.makeText(this, "已发送温度读取请求", Toast.LENGTH_SHORT).show()
-        }
+
         
         // 设备列表
         deviceAdapter = MeshDeviceAdapter(

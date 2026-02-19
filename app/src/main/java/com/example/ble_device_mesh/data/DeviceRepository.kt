@@ -1,5 +1,4 @@
 package com.example.ble_device_mesh.data
-
 import android.content.Context
 import android.content.SharedPreferences
 import com.google.gson.Gson
@@ -59,5 +58,20 @@ class DeviceRepository(context: Context) {
     // 根据 ID 获取设备
     fun getDeviceById(deviceId: String): MeshDevice? {
         return getAllDevices().find { it.id == deviceId }
+    }
+    
+    // 清除所有设备的温度数据
+    fun clearAllTemperatures() {
+        val devices = getAllDevices().toMutableList()
+        var updated = false
+        devices.forEach { 
+            if (it.temperature != null) {
+                it.temperature = null
+                updated = true
+            }
+        }
+        if (updated) {
+            saveDevices(devices)
+        }
     }
 }

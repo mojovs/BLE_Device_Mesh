@@ -1,5 +1,4 @@
 package com.example.ble_device_mesh
-
 import android.app.Application
 import android.bluetooth.le.ScanResult
 import no.nordicsemi.android.mesh.MeshNetwork
@@ -437,10 +436,76 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     // 连接到设备
     fun connectToDevice(device: ScanResult) {
         currentDevice = device
+        
+        // 保存成功的 Proxy 地址
+        saveProxyAddress(device.device.address)
+        
         connectionRetryCount = 0
         attemptConnection()
     }
     
+    // 直接连接到已保存的 Proxy 地址
+    fun connectToSavedProxy() {
+        val savedAddress = getSavedProxyAddress()
+        if (savedAddress == null) {
+            statusText.postValue("没有保存的 Proxy 地址，请先扫描一次")
+            return
+        }
+        
+        Log.d("MeshApp", "尝试直接连接到保存的地址: $savedAddress")
+        statusText.postValue("正在连接到保存的设备 $savedAddress...")
+        
+        bleConnection.connect(savedAddress, object : BleConnectionManager.ConnectionListener {
+            override fun onConnected() {
+                Log.d("MeshApp", "设备已连接 (直连)")
+                statusText.postValue("设备已连接，正在发现服务...")
+                connectedDeviceAddress.postValue(savedAddress)
+                connectionRetryCount = 0
+            }
+
+            override fun onDisconnected() {
+                Log.d("MeshApp", "设备已断开")
+                isConnected.postValue(false)
+                connectedDeviceAddress.postValue(null)
+                statusText.postValue("设备已断开，请重新连接")
+            }
+
+            override fun onServicesDiscovered() {
+                Log.d("MeshApp", "服务发现完成")
+                isConnected.postValue(true)
+                statusText.postValue("已连接到 $savedAddress")
+            }
+
+            override fun onDataReceived(data: ByteArray) {
+                meshManagerApi.handleNotifications(23, data)
+            }
+
+            override fun onMeshMessageReceived(src: Int, data: ByteArray) {
+            }
+
+            override fun onError(error: String) {
+                Log.e("MeshApp", "直连错误: $error")
+                statusText.postValue("连接失败: $error")
+                isConnected.postValue(false)
+            }
+        })
+    }
+    
+    private fun saveProxyAddress(address: String) {
+        val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString("last_proxy_address", address).apply()
+        Log.d("MeshApp", "已保存 Proxy 地址: $address")
+    }
+    
+    private fun getSavedProxyAddress(): String? {
+        val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
+        return prefs.getString("last_proxy_address", null)
+    }
+    
+    fun hasSavedProxyAddress(): Boolean {
+        return getSavedProxyAddress() != null
+    }
+
     private fun attemptConnection() {
         val device = currentDevice ?: return
         
