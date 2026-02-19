@@ -32,6 +32,7 @@ class BleConnectionManager(private val context: Context) {
         fun onDisconnected()
         fun onServicesDiscovered()
         fun onDataReceived(data: ByteArray)
+        fun onMeshMessageReceived(src: Int, data: ByteArray)
         fun onError(error: String)
     }
     
@@ -83,11 +84,23 @@ class BleConnectionManager(private val context: Context) {
             return false
         }
         
-        characteristic.value = data
-        // 显式设置为无应答写入，提高 Mesh 传输效率
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        val success = gatt.writeCharacteristic(characteristic)
-        Log.d("BleConnection", "发送数据 (${data.size} 字节, MTU=$mtuSize): ${data.joinToString(" ") { "%02X".format(it) }}, 结果: $success")
+        // 使用新的 API (Android 13+)
+        val success = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(
+                characteristic,
+                data,
+                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            ) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            characteristic.value = data
+            @Suppress("DEPRECATION")
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(characteristic)
+        }
+        
+        Log.d("BleConnection", "发送数据 (${data.size} 字节): ${data.joinToString(" ") { "%02X".format(it) }}, 结果: $success")
         return success
     }
     
@@ -151,8 +164,16 @@ class BleConnectionManager(private val context: Context) {
                     proxyDataOutCharacteristic?.let { characteristic ->
                         gatt.setCharacteristicNotification(characteristic, true)
                         val descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG)
-                        descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(descriptor)
+                        
+                        // 使用新的 API (Android 13+)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            @Suppress("DEPRECATION")
+                            gatt.writeDescriptor(descriptor)
+                        }
                         Log.d("BleConnection", "已启用 Data Out 通知")
                     }
                     
@@ -169,12 +190,31 @@ class BleConnectionManager(private val context: Context) {
         
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
         ) {
             if (characteristic.uuid == MESH_PROXY_DATA_OUT_UUID) {
-                val data = characteristic.value
-                Log.d("BleConnection", "收到数据 (${data.size} 字节)")
-                listener?.onDataReceived(data)
+                Log.d("BleConnection", "收到数据 (${value.size} 字节): ${value.joinToString(" ") { "%02X".format(it) }}")
+                listener?.onDataReceived(value)
+                
+                // 尝试解析源地址（简化版本，实际需要完整的 Mesh PDU 解析）
+                if (value.size >= 9) {
+                    // Mesh Network PDU 格式：IVI(1bit) + NID(7bits) + CTL(1bit) + TTL(7bits) + SEQ(24bits) + SRC(16bits) + DST(16bits) + ...
+                    // 简化：假设 SRC 在偏移 6-7 位置
+                    val src = ((value[6].toInt() and 0xFF) shl 8) or (value[7].toInt() and 0xFF)
+                    listener?.onMeshMessageReceived(src, value)
+                }
+            }
+        }
+        
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            // 兼容旧版本 API
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+                onCharacteristicChanged(gatt, characteristic, characteristic.value)
             }
         }
         

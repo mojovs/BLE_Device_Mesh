@@ -1,212 +1,247 @@
 package com.example.ble_device_mesh
 
-import android.Manifest
-import android.bluetooth.BluetoothAdapter
+import android.app.AlertDialog
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.SeekBar
-import android.widget.TextView
-import android.widget.Toast
+import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
+import android.widget.*
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import com.example.ble_device_mesh.data.DeviceRepository
+import com.example.ble_device_mesh.data.DeviceType
+import com.example.ble_device_mesh.data.MeshDevice
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MeshViewModel by viewModels()
-    private lateinit var deviceAdapter: DeviceAdapter
-    
-    // 权限请求
-    private val requestPermissions = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            Toast.makeText(this, "权限已授予", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "需要蓝牙权限才能扫描设备", Toast.LENGTH_LONG).show()
-        }
-    }
-    
-    // 蓝牙开启请求
-    private val enableBluetoothLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            Toast.makeText(this, "蓝牙已开启", Toast.LENGTH_SHORT).show()
-        }
-    }
-    
-    // 文件选择器
-    private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            importMeshConfig(it)
-        }
-    }
+    private lateinit var deviceAdapter: MeshDeviceAdapter
+    private lateinit var deviceRepository: DeviceRepository
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         
-        // 请求权限
-        checkAndRequestPermissions()
+        deviceRepository = DeviceRepository(this)
         
-        // 初始化 RecyclerView
+        setupViews()
+        loadDevices()
+        startTemperaturePolling()
+    }
+    
+    private fun setupViews() {
+        val tvStatus = findViewById<TextView>(R.id.tvStatus)
+        val btnAddDevice = findViewById<Button>(R.id.btnAddDevice)
         val rvDevices = findViewById<RecyclerView>(R.id.rvDevices)
-        deviceAdapter = DeviceAdapter(emptyList()) { device ->
-            // 点击设备时连接
-            viewModel.stopBleScan()
-            viewModel.connectToDevice(device)
+        val layoutEmpty = findViewById<LinearLayout>(R.id.layoutEmpty)
+        
+        // 添加设置按钮（如果布局中有的话）
+        findViewById<Button>(R.id.btnSettings)?.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
+        
+        // 手动刷新温度按钮
+        findViewById<Button>(R.id.btnRefreshTemp)?.setOnClickListener {
+            Log.d("MainActivity", "手动刷新温度")
+            val devices = deviceRepository.getAllDevices()
+            devices.forEach { device ->
+                viewModel.readTemperature(device.address)
+            }
+            Toast.makeText(this, "已发送温度读取请求", Toast.LENGTH_SHORT).show()
+        }
+        
+        // 设备列表
+        deviceAdapter = MeshDeviceAdapter(
+            emptyList(),
+            onDeviceClick = { device ->
+                openDeviceDetail(device)
+            },
+            onDeleteClick = { device ->
+                showDeleteConfirmDialog(device)
+            }
+        )
         rvDevices.layoutManager = LinearLayoutManager(this)
         rvDevices.adapter = deviceAdapter
         
-        // 状态文本
-        val tvStatus = findViewById<TextView>(R.id.tvStatus)
+        // 添加设备按钮
+        btnAddDevice.setOnClickListener {
+            showAddDeviceDialog()
+        }
+        
+        // 观察状态
         viewModel.statusText.observe(this) { status ->
             tvStatus.text = "状态: $status"
-        }
-        
-        // 扫描按钮
-        val btnStartScan = findViewById<Button>(R.id.btnStartScan)
-        val btnStopScan = findViewById<Button>(R.id.btnStopScan)
-        val btnImportConfig = findViewById<Button>(R.id.btnImportConfig)
-        
-        btnImportConfig.setOnClickListener {
-            filePickerLauncher.launch("application/json")
-        }
-        
-        btnStartScan.setOnClickListener {
-            if (!hasAllPermissions()) {
-                Toast.makeText(this, "请先授予所有必要权限", Toast.LENGTH_LONG).show()
-                checkAndRequestPermissions()
-                return@setOnClickListener
-            }
-            
-            if (checkBluetoothEnabled()) {
-                viewModel.startBleScan()
-            }
-        }
-        
-        btnStopScan.setOnClickListener {
-            viewModel.stopBleScan()
-        }
-        
-        // 观察扫描状态
-        viewModel.isScanning.observe(this) { scanning ->
-            btnStartScan.isEnabled = !scanning
-            btnStopScan.isEnabled = scanning
-        }
-        
-        // 观察扫描到的设备
-        viewModel.scannedDevices.observe(this) { devices ->
-            deviceAdapter.updateDevices(devices)
         }
         
         // 观察连接状态
         viewModel.isConnected.observe(this) { connected ->
             if (connected) {
-                Toast.makeText(this, "设备已连接，可以控制了", Toast.LENGTH_SHORT).show()
+                tvStatus.text = "状态: 已连接到 Proxy"
             }
         }
         
-        // 亮度滑动条
-        val brightnessSeekBar = findViewById<SeekBar>(R.id.brightnessSeekBar)
-        val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
-        
-        brightnessSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                tvBrightnessValue.text = "$progress%"
-                if (fromUser) {
-                    viewModel.sendBrightness(0x0005, progress)
-                }
+        // 观察温度更新
+        viewModel.temperatureUpdates.observe(this) { (address, temperature) ->
+            Log.d("MainActivity", "收到温度更新: 地址=0x${address.toString(16)}, 温度=$temperature°C")
+            // 更新设备列表中对应设备的温度
+            val devices = deviceRepository.getAllDevices()
+            val device = devices.find { it.address == address }
+            if (device != null) {
+                device.temperature = temperature
+                deviceRepository.updateDevice(device)
+                loadDevices() // 刷新列表
             }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
+        }
+        
+        // 自动连接到 Proxy（如果已有配置）
+        if (viewModel.meshNetWork != null) {
+            viewModel.autoConnectToProxy()
+        }
     }
     
-    private fun checkAndRequestPermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
+    private fun loadDevices() {
+        val devices = deviceRepository.getAllDevices()
+        deviceAdapter.updateDevices(devices)
+        
+        val layoutEmpty = findViewById<LinearLayout>(R.id.layoutEmpty)
+        val rvDevices = findViewById<RecyclerView>(R.id.rvDevices)
+        
+        if (devices.isEmpty()) {
+            layoutEmpty.visibility = View.VISIBLE
+            rvDevices.visibility = View.GONE
         } else {
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
-        }
-        
-        val needRequest = permissions.filter {
-            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        
-        if (needRequest.isNotEmpty()) {
-            Toast.makeText(this, "需要授予蓝牙和位置权限", Toast.LENGTH_LONG).show()
-            requestPermissions.launch(needRequest.toTypedArray())
+            layoutEmpty.visibility = View.GONE
+            rvDevices.visibility = View.VISIBLE
         }
     }
     
-    private fun hasAllPermissions(): Boolean {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
+    private fun showAddDeviceDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_add_device, null)
+        val etDeviceName = dialogView.findViewById<EditText>(R.id.etDeviceName)
+        val etDeviceAddress = dialogView.findViewById<EditText>(R.id.etDeviceAddress)
+        val spinnerDeviceType = dialogView.findViewById<Spinner>(R.id.spinnerDeviceType)
+        
+        // 设置设备类型选择器
+        val deviceTypes = arrayOf("灯光", "开关", "传感器", "其他")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, deviceTypes)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerDeviceType.adapter = adapter
+        
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .create()
+        
+        dialogView.findViewById<Button>(R.id.btnCancel).setOnClickListener {
+            dialog.dismiss()
         }
         
-        return permissions.all {
-            ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-    
-    private fun checkBluetoothEnabled(): Boolean {
-        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        if (bluetoothAdapter == null) {
-            Toast.makeText(this, "设备不支持蓝牙", Toast.LENGTH_SHORT).show()
-            return false
-        }
-        
-        if (!bluetoothAdapter.isEnabled) {
-            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(enableBtIntent)
-            return false
-        }
-        
-        return true
-    }
-    
-    private fun importMeshConfig(uri: Uri) {
-        try {
-            val inputStream = contentResolver.openInputStream(uri)
-            val reader = BufferedReader(InputStreamReader(inputStream))
-            val jsonData = reader.readText()
-            reader.close()
+        dialogView.findViewById<Button>(R.id.btnConfirm).setOnClickListener {
+            val name = etDeviceName.text.toString().trim()
+            val addressStr = etDeviceAddress.text.toString().trim()
             
-            viewModel.importMeshNetwork(jsonData)
-            Toast.makeText(this, "正在导入配置...", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "读取文件失败: ${e.message}", Toast.LENGTH_LONG).show()
+            if (name.isEmpty()) {
+                Toast.makeText(this, "请输入设备名称", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            if (addressStr.isEmpty()) {
+                Toast.makeText(this, "请输入设备地址", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            // 解析地址（支持 0x0005 或 5 格式）
+            val address = try {
+                if (addressStr.startsWith("0x", ignoreCase = true)) {
+                    addressStr.substring(2).toInt(16)
+                } else {
+                    addressStr.toInt(16)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "地址格式错误", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            val deviceType = when (spinnerDeviceType.selectedItemPosition) {
+                0 -> DeviceType.LIGHT
+                1 -> DeviceType.SWITCH
+                2 -> DeviceType.SENSOR
+                else -> DeviceType.OTHER
+            }
+            
+            val device = MeshDevice(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                address = address,
+                type = deviceType
+            )
+            
+            deviceRepository.addDevice(device)
+            loadDevices()
+            dialog.dismiss()
+            
+            Toast.makeText(this, "设备添加成功", Toast.LENGTH_SHORT).show()
         }
+        
+        dialog.show()
+    }
+    
+    private fun showDeleteConfirmDialog(device: MeshDevice) {
+        AlertDialog.Builder(this)
+            .setTitle("删除设备")
+            .setMessage("确定要删除 ${device.name} 吗？")
+            .setPositiveButton("删除") { _, _ ->
+                deviceRepository.deleteDevice(device.id)
+                loadDevices()
+                Toast.makeText(this, "设备已删除", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+    
+    private fun openDeviceDetail(device: MeshDevice) {
+        val intent = Intent(this, DeviceDetailActivity::class.java)
+        intent.putExtra(DeviceDetailActivity.EXTRA_DEVICE, device)
+        startActivity(intent)
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        loadDevices()
+    }
+    
+    private fun startTemperaturePolling() {
+        Log.d("MainActivity", "启动温度轮询")
+        
+        // 每30秒读取一次温度
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val runnable = object : Runnable {
+            override fun run() {
+                val connected = viewModel.isConnected.value == true
+                Log.d("MainActivity", "温度轮询检查 - 连接状态: $connected")
+                
+                if (connected) {
+                    val devices = deviceRepository.getAllDevices()
+                    Log.d("MainActivity", "准备读取 ${devices.size} 个设备的温度")
+                    
+                    devices.forEach { device ->
+                        Log.d("MainActivity", "读取设备 ${device.name} (0x${device.address.toString(16)}) 的温度")
+                        // 读取所有设备的温度
+                        viewModel.readTemperature(device.address)
+                        
+
+                    }
+                } else {
+                    Log.w("MainActivity", "未连接到 Proxy，跳过温度读取")
+                }
+                
+                handler.postDelayed(this, 30000) // 30秒后再次执行
+            }
+        }
+        
+        Log.d("MainActivity", "5秒后开始第一次温度读取")
+        handler.postDelayed(runnable, 5000) // 5秒后开始第一次读取
     }
 }

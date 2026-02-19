@@ -39,6 +39,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="设置"
+            android:theme="@style/Theme.BLE_Device_Mesh"/>
+        
+        <activity
+            android:name=".DeviceDetailActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BLE_Device_Mesh"/>
     </application>
 
 </manifest>

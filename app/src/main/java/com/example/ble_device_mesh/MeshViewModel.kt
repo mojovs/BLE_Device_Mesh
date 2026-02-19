@@ -11,10 +11,16 @@ import no.nordicsemi.android.mesh.MeshManagerCallbacks
 import no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode
 import no.nordicsemi.android.mesh.transport.GenericLevelSet
 import no.nordicsemi.android.mesh.transport.GenericLevelSetUnacknowledged
+import no.nordicsemi.android.mesh.transport.SensorGet
+import no.nordicsemi.android.mesh.transport.MeshMessage
+import no.nordicsemi.android.mesh.transport.SensorStatus
+import no.nordicsemi.android.mesh.MeshStatusCallbacks
+import no.nordicsemi.android.mesh.transport.ControlMessage
 
 class MeshViewModel(application: Application): AndroidViewModel(application) {
     private val meshManagerApi = MeshManagerApi(application)
-    private var meshNetWork: MeshNetwork?=null
+    var meshNetWork: MeshNetwork?=null
+        private set
     val statusText = MutableLiveData<String>()
     
     // BLE 扫描管理器
@@ -26,6 +32,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     private val bleConnection = BleConnectionManager(application)
     val isConnected = MutableLiveData<Boolean>(false)
     val connectedDeviceAddress = MutableLiveData<String?>(null)
+    
+    // 温度数据更新通知 (设备地址 -> 温度值)
+    val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
     private var currentDevice: ScanResult? = null
     private var connectionRetryCount = 0
     private val maxRetries = 3
@@ -33,6 +42,41 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     init {
         statusText.postValue("正在初始化MESH...")
+        
+        // 设置 MeshStatusCallbacks 以接收传感器数据等消息
+        meshManagerApi.setMeshStatusCallbacks(object : MeshStatusCallbacks {
+            override fun onTransactionFailed(dst: Int, hasIncompleteTimerExpired: Boolean) {
+                Log.e("MeshApp", "事务失败: dst=$dst")
+            }
+
+            override fun onUnknownPduReceived(src: Int, accessPayload: ByteArray?) {
+                Log.d("MeshApp", "收到未知 PDU: src=$src")
+            }
+
+            override fun onBlockAcknowledgementProcessed(dst: Int, source: ControlMessage) {
+            }
+
+            override fun onBlockAcknowledgementReceived(src: Int, wrapper: ControlMessage) {
+            }
+
+            override fun onMeshMessageProcessed(dst: Int, meshMessage: MeshMessage) {
+            }
+
+            override fun onMessageDecryptionFailed(meshLayer: String?, errorMessage: String?) {
+                Log.e("MeshApp", "消息解密失败: layer=$meshLayer, error=$errorMessage")
+            }
+
+            override fun onMeshMessageReceived(src: Int, meshMessage: MeshMessage) {
+                if (meshMessage is SensorStatus) {
+                    val data = meshMessage.parameters
+                    if (data != null && data.isNotEmpty()) {
+                        Log.d("MeshApp", "收到 SensorStatus (Src: $src): ${data.joinToString("") { "%02X".format(it) }}")
+                        parseSensorStatus(src, data)
+                    }
+                }
+            }
+        })
+
         meshManagerApi.setMeshManagerCallbacks(object : MeshManagerCallbacks{
             override fun onNetworkLoaded(network: MeshNetwork?) {
                 Log.d("MeshApp", "onNetworkLoaded 被调用, network = $network")
@@ -57,7 +101,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                              setMethod.invoke(provisioner, 0x0099)
                              statusText.postValue("已自动修复地址冲突 (0x1 -> 0x99)")
                          }
-                    } catch (e: Exception) {
+                     } catch (e: Exception) {
                         Log.e("MeshApp", "强制修改地址失败: $e")
                     }
                     
@@ -131,6 +175,126 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         meshManagerApi.loadMeshNetwork()
         Log.d("MeshApp", "loadMeshNetwork() 调用完成")
     }
+    
+    // 解析传感器数据 (Present Ambient Temperature 0x004F)
+    private fun parseSensorStatus(src: Int, data: ByteArray) {
+        var offset = 0
+        while (offset < data.size) {
+            try {
+                val byte0 = data[offset].toInt()
+                
+                // ----------------------------------------------------
+                // 1. 尝试检测 CH592 固件的自定义格式
+                // 固件逻辑: byte0 = (1 << 1) | ((propId >> 10) & 1)
+                // ----------------------------------------------------
+                if ((byte0 and 0xFE) == 0x02 && offset + 3 < data.size) {
+                    val byte1 = data[offset + 1].toInt()
+                    val byte2 = data[offset + 2].toInt()
+                    
+                    // 重组 Property ID
+                    // bits 10: byte0 bit 0
+                    // bits 9-2: byte1
+                    // bits 1-0: byte2 bits 7-6
+                    val propIdMsb = (byte0 and 0x01)
+                    val propIdMid = (byte1 and 0xFF)
+                    val propIdLsb = (byte2 shr 6) and 0x03
+                    
+                    val customPropId = (propIdMsb shl 10) or (propIdMid shl 2) or propIdLsb
+                    
+                    if (customPropId == 0x004F) {
+                        Log.d("MeshApp", "检测到 CH592 自定义格式 (PropID: 0x004F)")
+                        
+                        val byte3 = data[offset + 3].toInt()
+                        
+                        // 重组 Value (Temperature 8 format currently)
+                        // Value high 6 bits: byte2 bits 5-0
+                        // Value low 2 bits: byte3 bits 7-6
+                        val valHigh = (byte2 and 0x3F)
+                        val valLow = (byte3 shr 6) and 0x03
+                        
+                        val rawValue = (valHigh shl 2) or valLow
+                        
+                        // 转为带符号 byte 处理 (0.5°C steps)
+                        val signedValue = rawValue.toByte()
+                        val tempVal = signedValue * 0.5f
+                        
+                        Log.d("MeshApp", "解析到温度 (自定义): $tempVal (Src: 0x${src.toString(16)})")
+                        temperatureUpdates.postValue(Pair(src, tempVal))
+                        
+                        offset += 4
+                        continue
+                    }
+                }
+
+                // ----------------------------------------------------
+                // 2. 标准 Format A / B 解析
+                // ----------------------------------------------------
+                val format = (byte0 shr 7) and 1
+                var length = 0
+                var propertyId = 0
+                var valueOffset = 0
+                
+                if (format == 0) {
+                    // Format A
+                    // 格式: Format(1) + Length(4) + PropID_High(3) | PropID_Low(8) | Value...
+                    if (offset + 1 >= data.size) break
+                    
+                    val lenCode = (byte0 shr 3) and 0xF
+                    length = if (lenCode == 0xF) 1 else lenCode + 1 
+                    
+                    val propIdMsb = byte0 and 0x7
+                    val propIdLsb = data[offset + 1].toInt() and 0xFF
+                    propertyId = (propIdMsb shl 8) or propIdLsb
+                    
+                    valueOffset = offset + 2
+                    offset += 2 + length
+                } else {
+                    // Format B
+                    // 格式: Format(1) + Length(7) | PropID(8) | PropID(8) | Value...
+                    if (offset + 2 >= data.size) break
+                    
+                    val lenCode = byte0 and 0x7F
+                    length = if (lenCode == 0x7F) 1 else lenCode + 1
+                    
+                    propertyId = ((data[offset + 2].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
+                    
+                    valueOffset = offset + 3
+                    offset += 3 + length
+                }
+                
+                Log.d("MeshApp", "解析属性: ID=0x${propertyId.toString(16)}, Length=$length")
+                
+                // 检查是否是温度属性 (0x004F: Present Ambient Temperature)
+                if (propertyId == 0x004F) {
+                    if (valueOffset + length <= data.size) {
+                       var tempVal = 0.0f
+                       // 根据数据长度解析
+                       if (length == 1) {
+                           // 8位带符号整数，单位 0.5摄氏度 (Format 8)
+                           val raw = data[valueOffset].toByte()
+                           tempVal = raw * 0.5f 
+                       } else if (length == 2) {
+                           // 16位带符号整数，单位 0.01摄氏度 (Format 67)
+                           val raw = ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or (data[valueOffset].toInt() and 0xFF)
+                           val signedRaw = raw.toShort()
+                           tempVal = signedRaw * 0.01f
+                       } else if (length == 4) {
+                           // 可能是浮点数或其他格式，暂不支持
+                           Log.w("MeshApp", "暂不支持 4 字节温度格式")
+                           // 尝试按 float 解析
+                           // tempVal = ByteBuffer.wrap(data, valueOffset, 4).order(ByteOrder.LITTLE_ENDIAN).float
+                       }
+                       
+                       Log.d("MeshApp", "解析到温度: $tempVal (Src: 0x${src.toString(16)})")
+                       temperatureUpdates.postValue(Pair(src, tempVal))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MeshApp", "解析传感器数据出错: ${e.message}")
+                break
+            }
+        }
+    }
 
 
     fun sendBrightness(address: Int, brightness: Int) {
@@ -169,6 +333,28 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         
         meshManagerApi.createMeshPdu(address, message)
         statusText.postValue("发送: $info")
+    }
+    
+    // 读取传感器温度
+    fun readTemperature(address: Int) {
+        val network = meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+        
+        Log.d("MeshApp", "读取温度: address=0x${address.toString(16)}")
+        
+        // 发送 Sensor Get 消息
+        // Property ID 0x004F 是 Present Ambient Temperature (温度传感器)
+        // 如果传 null，会返回所有传感器数据
+        val message = SensorGet(appKey, null)
+        
+        meshManagerApi.createMeshPdu(address, message)
     }
     
     // 开始扫描 BLE 设备
@@ -214,6 +400,40 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         statusText.postValue("扫描已停止")
     }
     
+    // 自动连接到最近的 Proxy 节点
+    fun autoConnectToProxy() {
+        Log.d("MeshApp", "开始自动连接 Proxy")
+        statusText.postValue("正在搜索 Proxy 节点...")
+        
+        var foundProxy: ScanResult? = null
+        
+        bleScanner.startScan(object : BleScannerManager.ScanListener {
+            override fun onDeviceFound(device: ScanResult) {
+                // 找到第一个 Proxy 节点就连接
+                if (foundProxy == null) {
+                    foundProxy = device
+                    Log.d("MeshApp", "找到 Proxy 节点: ${device.device.address}")
+                    bleScanner.stopScan()
+                    connectToDevice(device)
+                }
+            }
+            
+            override fun onScanFailed(errorCode: Int) {
+                statusText.postValue("未找到 Proxy 节点")
+                Log.e("MeshApp", "扫描失败: $errorCode")
+            }
+        })
+        
+        // 10秒后如果还没找到，停止扫描
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (foundProxy == null) {
+                bleScanner.stopScan()
+                statusText.postValue("未找到 Proxy 节点，请手动连接")
+                Log.w("MeshApp", "10秒内未找到 Proxy 节点")
+            }
+        }, 10000)
+    }
+    
     // 连接到设备
     fun connectToDevice(device: ScanResult) {
         currentDevice = device
@@ -253,6 +473,12 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 // 必须将收到的数据交给 MeshManagerApi 处理
                 // 否则 Mesh 协议栈无法更新状态，设备可能会因为收不到响应而断开连接
                 meshManagerApi.handleNotifications(23, data)
+            }
+            
+            override fun onMeshMessageReceived(src: Int, data: ByteArray) {
+                Log.d("MeshApp", "收到来自 0x${src.toString(16)} 的 Mesh 消息")
+                // 这里可以进一步解析消息类型
+                // 但实际上 MeshManagerApi.handleNotifications 会触发相应的回调
             }
             
             override fun onError(error: String) {

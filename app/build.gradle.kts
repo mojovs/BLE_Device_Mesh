@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("kotlin-parcelize")
 }
 
 android {
@@ -53,6 +54,15 @@ dependencies {
     
     // RecyclerView
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    
+    // Gson for JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+    
+    // CardView
+    implementation("androidx.cardview:cardview:1.0.0")
+    
+    // Material Design
+    implementation("com.google.android.material:material:1.11.0")
     
     // Mesh 协议栈核心库
     implementation("no.nordicsemi.android:mesh:3.3.0")
