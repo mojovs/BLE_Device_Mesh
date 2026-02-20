@@ -23,16 +23,29 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        
-        deviceRepository = DeviceRepository(this)
-        
-        // 清除旧的温度数据，避免显示过期的信息
-        deviceRepository.clearAllTemperatures()
-        
-        setupViews()
-        loadDevices()
-        startTemperaturePolling()
+        try {
+            setContentView(R.layout.activity_main)
+            
+            deviceRepository = DeviceRepository(this)
+            
+            // 清除旧的温度数据，避免显示过期的信息
+            try {
+                deviceRepository.clearAllTemperatures()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "清除温度失败: ${e.message}")
+            }
+            
+            setupViews()
+            loadDevices()
+            startTemperaturePolling()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "onCreate 严重错误: ${e.message}")
+            e.printStackTrace()
+            // 尝试显示 Toast
+            try {
+                 Toast.makeText(this, "应用启动异常: ${e.message}", Toast.LENGTH_LONG).show()
+            } catch (e2: Exception) {}
+        }
     }
     
     private fun setupViews() {
@@ -71,6 +84,12 @@ class MainActivity : ComponentActivity() {
             tvStatus.text = "状态: $status"
         }
         
+        // 观察本机地址 (新增)
+        viewModel.currentProvisionerAddress.observe(this) { address ->
+             val tvSrc = findViewById<TextView>(R.id.tvSrcAddress)
+             tvSrc.text = "本机地址: 0x${address.toString(16).uppercase()}"
+        }
+        
         // 观察连接状态
         viewModel.isConnected.observe(this) { connected ->
             if (connected) {
@@ -91,9 +110,29 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        // 自动连接到 Proxy（如果已有配置）
-        if (viewModel.meshNetWork != null) {
-            viewModel.autoConnectToProxy()
+        // 观察网络加载状态，加载完成后自动连接
+        viewModel.isNetworkLoaded.observe(this) { loaded ->
+            try {
+                if (loaded) {
+                    Log.d("MainActivity", "Mesh网络加载完毕，尝试自动连接...")
+                    val connected = viewModel.isConnected.value ?: false
+                    if (!connected) {
+                        try {
+                            if (viewModel.hasSavedProxyAddress()) {
+                                Log.d("MainActivity", "尝试连接保存的接入点")
+                                viewModel.connectToSavedProxy()
+                            } else {
+                                Log.d("MainActivity", "没有保存的接入点，扫描附近的 Proxy")
+                                viewModel.autoConnectToProxy()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "自动连接过程异常: ${e.message}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "isNetworkLoaded 观察出错: ${e.message}")
+            }
         }
     }
     
@@ -199,6 +238,7 @@ class MainActivity : ComponentActivity() {
     private fun openDeviceDetail(device: MeshDevice) {
         val intent = Intent(this, DeviceDetailActivity::class.java)
         intent.putExtra(DeviceDetailActivity.EXTRA_DEVICE, device)
+        intent.putExtra("EXTRA_IS_CONNECTED", viewModel.isConnected.value ?: false) // Pass connection state
         startActivity(intent)
     }
     
@@ -207,36 +247,42 @@ class MainActivity : ComponentActivity() {
         loadDevices()
     }
     
-    private fun startTemperaturePolling() {
-        Log.d("MainActivity", "启动温度轮询")
-        
-        // 每30秒读取一次温度
-        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        val runnable = object : Runnable {
-            override fun run() {
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val temperatureRunnable = object : Runnable {
+        override fun run() {
+            try {
+                if (isFinishing || isDestroyed) return
+                
                 val connected = viewModel.isConnected.value == true
-                Log.d("MainActivity", "温度轮询检查 - 连接状态: $connected")
+                // Log.d("MainActivity", "温度轮询检查 - 连接状态: $connected")
                 
                 if (connected) {
                     val devices = deviceRepository.getAllDevices()
-                    Log.d("MainActivity", "准备读取 ${devices.size} 个设备的温度")
-                    
-                    devices.forEach { device ->
-                        Log.d("MainActivity", "读取设备 ${device.name} (0x${device.address.toString(16)}) 的温度")
-                        // 读取所有设备的温度
-                        viewModel.readTemperature(device.address)
-                        
-
+                    if (devices.isNotEmpty()) {
+                        Log.d("MainActivity", "读取 ${devices.size} 个设备的温度...")
+                        devices.forEach { device ->
+                            viewModel.readTemperature(device.address)
+                        }
                     }
-                } else {
-                    Log.w("MainActivity", "未连接到 Proxy，跳过温度读取")
                 }
-                
+            } catch (e: Exception) {
+                Log.e("MainActivity", "温度轮询出错: ${e.message}")
+            } finally {
                 handler.postDelayed(this, 30000) // 30秒后再次执行
             }
         }
+    }
+
+    private fun startTemperaturePolling() {
+        Log.d("MainActivity", "启动温度轮询")
+        handler.removeCallbacks(temperatureRunnable) // 避免重复
         
-        Log.d("MainActivity", "5秒后开始第一次温度读取")
-        handler.postDelayed(runnable, 5000) // 5秒后开始第一次读取
+        // 5秒后每次执行
+        handler.postDelayed(temperatureRunnable, 5000)
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacks(temperatureRunnable)
     }
 }

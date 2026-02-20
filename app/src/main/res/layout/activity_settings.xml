@@ -65,8 +65,18 @@
                     android:id="@+id/btnImportConfig"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="导入 nRF Mesh 配置"
+                    android:text="导入 Mesh 配置 (Json)"
                     android:textSize="16sp"/>
+
+                <Button
+                    android:id="@+id/btnExportConfig"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="导出 Mesh 配置 (Json)"
+                    android:textSize="16sp"/>
+
+
 
                 <TextView
                     android:id="@+id/tvConfigStatus"
@@ -76,6 +86,15 @@
                     android:text="未导入配置"
                     android:textSize="14sp"
                     android:textColor="#666666"/>
+                
+                <TextView
+                    android:id="@+id/tvProvisionerAddress"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Provisioner 地址: --"
+                    android:textSize="12sp"
+                    android:textColor="#FF9800"/>
             </LinearLayout>
 
             <!-- Proxy 连接 -->
