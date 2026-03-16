@@ -10,8 +10,10 @@ import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -28,6 +30,7 @@ class DeviceDetailActivity : ComponentActivity() {
     private lateinit var device: MeshDevice
     private lateinit var scanAdapter: DeviceAdapter
     private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
+    private var isUserSelection = false  // 标记是否是用户主动选择
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
@@ -74,8 +77,11 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
         val btnBack = findViewById<TextView>(R.id.btnBack)
         val tvConnectionStatus = findViewById<TextView>(R.id.tvConnectionStatus)
+        val spinnerProxyAddress = findViewById<Spinner>(R.id.spinnerProxyAddress)
         val btnConnect = findViewById<Button>(R.id.btnConnect)
+        val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
         val tvDeviceInfo = findViewById<TextView>(R.id.tvDeviceInfo)
+        val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
@@ -88,34 +94,93 @@ class DeviceDetailActivity : ComponentActivity() {
             finish()
         }
         
-        // 连接按钮
+        // 设置 Spinner 数据
+        setupProxySpinner(spinnerProxyAddress)
+        
+        // 设置设备 MAC 地址 Spinner
+        setupDeviceMacSpinner(spinnerDeviceMac)
+        
+        // Spinner 选择监听 - 自动连接
+        spinnerProxyAddress.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                // 只有用户主动选择时才触发连接
+                if (!isUserSelection) {
+                    isUserSelection = true
+                    return
+                }
+                
+                val selectedItem = spinnerProxyAddress.selectedItem?.toString()
+                
+                // 避免在初始化时触发连接
+                if (selectedItem.isNullOrEmpty()) return
+                
+                // 如果选择的是当前已连接的地址，不重复连接
+                val currentAddress = viewModel.connectedDeviceAddress.value
+                if (selectedItem == currentAddress) {
+                    return
+                }
+                
+                if (selectedItem == "扫描新设备...") {
+                    showProxyScanDialog()
+                } else {
+                    // 选择了历史 MAC 地址，自动连接
+                    viewModel.connectToAddress(selectedItem)
+                }
+            }
+            
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+        
+        // 连接按钮改为断开按钮
         btnConnect.setOnClickListener {
             if (viewModel.isConnected.value == true) {
+                // 断开前，禁用自动连接
+                isUserSelection = false
                 viewModel.disconnectDevice()
-            } else {
-                if (viewModel.hasSavedProxyAddress()) {
-                    AlertDialog.Builder(this)
-                        .setTitle("连接方式")
-                        .setMessage("发现上次连接的记录，是否直接连接？")
-                        .setPositiveButton("直接连接") { _, _ ->
-                            viewModel.connectToSavedProxy()
-                        }
-                        .setNegativeButton("扫描新设备") { _, _ ->
-                            showProxyScanDialog()
-                        }
-                        .show()
-                } else {
-                    showProxyScanDialog()
+            }
+        }
+        
+        // 自动连接按钮
+        btnAutoConnect.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                Toast.makeText(this, "已经连接到设备", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            val history = viewModel.getProxyAddressHistory()
+            if (history.isEmpty()) {
+                Toast.makeText(this, "没有历史连接记录", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            Toast.makeText(this, "开始自动连接，尝试 ${history.size} 个设备...", Toast.LENGTH_SHORT).show()
+            btnAutoConnect.isEnabled = false
+            
+            viewModel.autoConnectFromHistory {
+                // 所有设备都连接失败
+                runOnUiThread {
+                    btnAutoConnect.isEnabled = true
+                    Toast.makeText(this, "所有历史设备均无法连接", Toast.LENGTH_LONG).show()
                 }
             }
         }
         
         // 设备信息
-        tvDeviceInfo.text = """
+        val savedMac = getDeviceMac(device.address)
+        tvDeviceInfo.text = if (savedMac != null) {
+            """
             名称: ${device.name}
             地址: 0x${device.address.toString(16).uppercase()}
             类型: ${getDeviceTypeName(device.type)}
-        """.trimIndent()
+            MAC: $savedMac
+            """.trimIndent()
+        } else {
+            """
+            名称: ${device.name}
+            地址: 0x${device.address.toString(16).uppercase()}
+            类型: ${getDeviceTypeName(device.type)}
+            """.trimIndent()
+        }
         
         // 亮度控制
         val savedBrightness = getSavedBrightness(device.address)
@@ -158,6 +223,37 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
         
+        // 时间同步控制
+        val tvDeviceTime = findViewById<TextView>(R.id.tvDeviceTime)
+        val btnReadTime = findViewById<Button>(R.id.btnReadTime)
+        val btnSyncTime = findViewById<Button>(R.id.btnSyncTime)
+        
+        // 显示设备时间
+        if (device.deviceTime != null) {
+            val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            tvDeviceTime.text = "设备时间: ${dateFormat.format(java.util.Date(device.deviceTime!! * 1000))}"
+        } else {
+            tvDeviceTime.text = "设备时间: --"
+        }
+        
+        btnReadTime.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.readDeviceTime(device.address)
+                Toast.makeText(this, "已发送时间读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
+        btnSyncTime.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.setDeviceTime(device.address)
+                Toast.makeText(this, "正在同步时间到设备...", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
         // 观察状态
         viewModel.statusText.observe(this) { status ->
             tvStatus.text = "状态: $status"
@@ -165,16 +261,47 @@ class DeviceDetailActivity : ComponentActivity() {
         
         // 观察连接状态
         viewModel.isConnected.observe(this) { connected ->
+            val spinnerProxyAddress = findViewById<Spinner>(R.id.spinnerProxyAddress)
+            val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
+            
             if (connected) {
-                tvConnectionStatus.text = "已连接到 Proxy 节点"
+                tvConnectionStatus.text = "已连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
-                btnConnect.text = "断开连接"
+                btnConnect.text = "断开"
+                btnConnect.visibility = View.VISIBLE
+                btnAutoConnect.visibility = View.GONE
                 btnRefreshTemp.isEnabled = true
+                btnReadTime.isEnabled = true
+                btnSyncTime.isEnabled = true
+                spinnerProxyAddress.isEnabled = false
             } else {
                 tvConnectionStatus.text = "未连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.darker_gray))
-                btnConnect.text = "连接 Proxy"
+                btnConnect.text = "断开"
+                btnConnect.visibility = View.GONE
+                btnAutoConnect.visibility = View.VISIBLE
+                btnAutoConnect.isEnabled = true
                 btnRefreshTemp.isEnabled = false
+                btnReadTime.isEnabled = false
+                btnSyncTime.isEnabled = false
+                spinnerProxyAddress.isEnabled = true
+                
+                // 刷新 Spinner 列表（可能有新的历史记录）
+                isUserSelection = false  // 重置标志，避免自动触发连接
+                setupProxySpinner(spinnerProxyAddress)
+            }
+        }
+        
+        // 观察连接地址变化，更新 Spinner 选择
+        viewModel.connectedDeviceAddress.observe(this) { address ->
+            if (address != null) {
+                val spinnerProxyAddress = findViewById<Spinner>(R.id.spinnerProxyAddress)
+                val history = viewModel.getProxyAddressHistory()
+                val index = history.indexOf(address)
+                if (index >= 0) {
+                    isUserSelection = false  // 防止触发自动连接
+                    spinnerProxyAddress.setSelection(index)
+                }
             }
         }
         
@@ -188,9 +315,139 @@ class DeviceDetailActivity : ComponentActivity() {
                 deviceRepository.updateDevice(device)
             }
         }
+        
+        // 观察时间更新
+        viewModel.timeUpdates.observe(this) { (address, unixTime) ->
+            if (address == device.address) {
+                val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                tvDeviceTime.text = "设备时间: ${dateFormat.format(java.util.Date(unixTime * 1000))}"
+                // 更新设备对象
+                device.deviceTime = unixTime
+                deviceRepository.updateDevice(device)
+            }
+        }
     }
     
     private fun observeViewModel() {
+    }
+    
+    private fun setupProxySpinner(spinner: Spinner) {
+        val history = viewModel.getProxyAddressHistory().toMutableList()
+        
+        // 添加"扫描新设备..."选项
+        val items = if (history.isEmpty()) {
+            listOf("扫描新设备...")
+        } else {
+            history + "扫描新设备..."
+        }
+        
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinner.adapter = adapter
+        
+        // 如果当前已连接，选择当前连接的地址
+        val currentAddress = viewModel.connectedDeviceAddress.value
+        if (currentAddress != null && history.contains(currentAddress)) {
+            val index = history.indexOf(currentAddress)
+            spinner.setSelection(index)
+        } else if (history.isNotEmpty()) {
+            // 默认选择第一个历史地址
+            spinner.setSelection(0)
+        }
+    }
+    
+    private fun setupDeviceMacSpinner(spinner: Spinner) {
+        val history = viewModel.getProxyAddressHistory().toMutableList()
+        
+        if (history.isEmpty()) {
+            spinner.visibility = View.GONE
+            return
+        }
+        
+        spinner.visibility = View.VISIBLE
+        
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, history)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinner.adapter = adapter
+        
+        // 读取该设备保存的 MAC 地址
+        val savedMac = getDeviceMac(device.address)
+        if (savedMac != null && history.contains(savedMac)) {
+            val index = history.indexOf(savedMac)
+            spinner.setSelection(index)
+        } else {
+            // 默认选择第一个
+            spinner.setSelection(0)
+        }
+        
+        // 选择监听 - 保存设备 MAC 地址
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            private var isFirstSelection = true
+            
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (isFirstSelection) {
+                    isFirstSelection = false
+                    return
+                }
+                
+                val selectedMac = spinner.selectedItem?.toString()
+                if (!selectedMac.isNullOrEmpty()) {
+                    // 保存该设备的 MAC 地址
+                    saveDeviceMac(device.address, selectedMac)
+                    Toast.makeText(this@DeviceDetailActivity, "已保存设备 MAC: $selectedMac", Toast.LENGTH_SHORT).show()
+                    
+                    // 更新设备信息显示
+                    val tvDeviceInfo = findViewById<TextView>(R.id.tvDeviceInfo)
+                    tvDeviceInfo.text = """
+                        名称: ${device.name}
+                        地址: 0x${device.address.toString(16).uppercase()}
+                        类型: ${getDeviceTypeName(device.type)}
+                        MAC: $selectedMac
+                    """.trimIndent()
+                }
+            }
+            
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+    }
+    
+    private fun saveDeviceMac(deviceAddress: Int, macAddress: String) {
+        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString("device_mac_0x${deviceAddress.toString(16)}", macAddress).apply()
+    }
+    
+    private fun getDeviceMac(deviceAddress: Int): String? {
+        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        return prefs.getString("device_mac_0x${deviceAddress.toString(16)}", null)
+    }
+    
+    private fun showProxyConnectionDialog() {
+        val history = viewModel.getProxyAddressHistory()
+        
+        if (history.isEmpty()) {
+            // 没有历史记录，直接扫描
+            showProxyScanDialog()
+            return
+        }
+        
+        // 有历史记录，显示选择对话框
+        val items = history.toTypedArray()
+        val itemsWithScan = items + "扫描新设备..."
+        
+        AlertDialog.Builder(this)
+            .setTitle("选择 Proxy 节点")
+            .setItems(itemsWithScan) { _, which ->
+                if (which < items.size) {
+                    // 选择历史地址
+                    val selectedAddress = items[which]
+                    viewModel.connectToAddress(selectedAddress)
+                } else {
+                    // 扫描新设备
+                    showProxyScanDialog()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
     
     private fun showProxyScanDialog() {

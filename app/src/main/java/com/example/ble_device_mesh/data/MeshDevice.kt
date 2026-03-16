@@ -11,6 +11,7 @@ data class MeshDevice(
     val type: DeviceType,  // 设备类型
     var brightness: Int = 50,  // 当前亮度 0-100
     var temperature: Float? = null,  // 当前温度（摄氏度）
+    var deviceTime: Long? = null,  // 设备时间（Unix 时间戳，秒）
     var isOnline: Boolean = false,  // 是否在线
     val addedTime: Long = System.currentTimeMillis()  // 添加时间
 ) : Parcelable

@@ -15,6 +15,9 @@ import no.nordicsemi.android.mesh.transport.GenericLevelSetUnacknowledged
 import no.nordicsemi.android.mesh.transport.MeshMessage
 import no.nordicsemi.android.mesh.transport.SensorGet
 import no.nordicsemi.android.mesh.transport.SensorStatus
+import no.nordicsemi.android.mesh.transport.TimeGet
+import no.nordicsemi.android.mesh.transport.TimeSet
+import no.nordicsemi.android.mesh.transport.TimeStatus
 
 class MeshViewModel(application: Application): AndroidViewModel(application) {
 
@@ -31,6 +34,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val isConnected = MutableLiveData<Boolean>(false)
         val isNetworkLoaded = MutableLiveData<Boolean>(false)
         val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
+        val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val scannedDevices = MutableLiveData<List<ScanResult>>(emptyList())
         val isScanning = MutableLiveData<Boolean>(false)
         val connectedDeviceAddress = MutableLiveData<String?>(null)
@@ -48,6 +52,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     val isConnected get() = MeshState.isConnected
     val isNetworkLoaded get() = MeshState.isNetworkLoaded
     val temperatureUpdates get() = MeshState.temperatureUpdates
+    val timeUpdates get() = MeshState.timeUpdates
     val scannedDevices get() = MeshState.scannedDevices
     val isScanning get() = MeshState.isScanning
     val connectedDeviceAddress get() = MeshState.connectedDeviceAddress
@@ -111,6 +116,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         Log.d("MeshApp", "收到 SensorStatus (Src: $src): ${data.joinToString("") { "%02X".format(it) }}")
                         parseSensorStatus(src, data)
                     }
+                } else if (meshMessage is TimeStatus) {
+                    Log.d("MeshApp", "收到 TimeStatus (Src: 0x${src.toString(16)})")
+                    parseTimeStatus(src, meshMessage)
                 }
             }
         })
@@ -252,6 +260,27 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 return bleConnection.mtuSize
             }
         })
+    }
+    
+    // 解析时间状态
+    private fun parseTimeStatus(src: Int, timeStatus: TimeStatus) {
+        try {
+            // TimeStatus 包含 TAI 秒数
+            val taiSeconds = timeStatus.taiSeconds
+            
+            if (taiSeconds == null) {
+                Log.w("MeshApp", "TimeStatus 中 taiSeconds 为空")
+                return
+            }
+            
+            // TAI 转 Unix 时间戳（减去 37 秒偏移）
+            val unixTime = taiSeconds.toLong() - 37L
+            
+            Log.d("MeshApp", "解析到设备时间: TAI=$taiSeconds, Unix=$unixTime (Src: 0x${src.toString(16)})")
+            MeshState.timeUpdates.postValue(Pair(src, unixTime))
+        } catch (e: Exception) {
+            Log.e("MeshApp", "解析 TimeStatus 失败: ${e.message}")
+        }
     }
     
     // 解析传感器数据
@@ -403,6 +432,72 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
     
+    // 读取设备时间
+    fun readDeviceTime(address: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+        
+        Log.d("MeshApp", "读取设备时间: address=0x${address.toString(16)}")
+        val message = TimeGet(appKey)
+        
+        try {
+            MeshState.meshManagerApi.createMeshPdu(address, message)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "创建时间读取 PDU 失败: ${e.message}")
+            MeshState.statusText.postValue("读取时间失败: ${e.message}")
+        }
+    }
+    
+    // 设置设备时间（同步当前手机时间）
+    fun setDeviceTime(address: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+        
+        // 获取当前 Unix 时间戳（秒）
+        val currentTime = System.currentTimeMillis() / 1000
+        
+        Log.d("MeshApp", "设置设备时间: address=0x${address.toString(16)}, time=$currentTime")
+        
+        // TAI 时间 = Unix 时间 + 37秒（2017年1月1日的偏移）
+        val taiSeconds = (currentTime + 37).toInt()
+        
+        // 创建 MeshTAITime 对象
+        // 参数: taiSeconds, subSecond, uncertainty, timeAuthority, tai_utc_delta, timeZoneOffset
+        val taiTime = no.nordicsemi.android.mesh.MeshTAITime(
+            taiSeconds,  // TAI 秒数
+            0,           // 亚秒 (0-255)
+            0,           // 不确定性
+            false,       // 时间权威性 (Boolean)
+            0,           // TAI-UTC 差值
+            0            // 时区偏移
+        )
+        
+        // TimeSet 参数：appKey, MeshTAITime对象
+        val message = TimeSet(appKey, taiTime)
+        
+        try {
+            MeshState.meshManagerApi.createMeshPdu(address, message)
+            MeshState.statusText.postValue("正在同步时间到设备...")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "创建时间设置 PDU 失败: ${e.message}")
+            MeshState.statusText.postValue("设置时间失败: ${e.message}")
+        }
+    }
+    
     fun startBleScan() {
         if (!MeshState.bleScanner.isBluetoothEnabled()) {
             MeshState.statusText.postValue("蓝牙未开启")
@@ -540,6 +635,75 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     private fun saveProxyAddress(address: String) {
         val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
         prefs.edit().putString("last_proxy_address", address).apply()
+        
+        // 保存到历史列表
+        val history = getProxyAddressHistory().toMutableSet()
+        history.add(address)
+        prefs.edit().putStringSet("proxy_address_history", history).apply()
+    }
+    
+    fun getProxyAddressHistory(): List<String> {
+        val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
+        return prefs.getStringSet("proxy_address_history", emptySet())?.toList() ?: emptyList()
+    }
+    
+    fun connectToAddress(address: String) {
+        MeshState.statusText.postValue("正在连接到 $address...")
+        MeshState.bleConnection.connect(address, createConnectionListener(address))
+    }
+    
+    fun autoConnectFromHistory(onAllFailed: () -> Unit) {
+        val history = getProxyAddressHistory()
+        if (history.isEmpty()) {
+            MeshState.statusText.postValue("没有历史连接记录")
+            onAllFailed()
+            return
+        }
+        
+        MeshState.statusText.postValue("正在尝试自动连接...")
+        tryConnectToNextAddress(history, 0, onAllFailed)
+    }
+    
+    private fun tryConnectToNextAddress(addresses: List<String>, index: Int, onAllFailed: () -> Unit) {
+        if (index >= addresses.size) {
+            MeshState.statusText.postValue("所有历史设备均无法连接")
+            onAllFailed()
+            return
+        }
+        
+        val address = addresses[index]
+        MeshState.statusText.postValue("尝试连接 $address (${index + 1}/${addresses.size})...")
+        
+        MeshState.bleConnection.connect(address, object : BleConnectionManager.ConnectionListener {
+            override fun onConnected() {
+                MeshState.statusText.postValue("设备已连接，正在发现服务...")
+            }
+
+            override fun onDisconnected() {
+                MeshState.isConnected.postValue(false)
+                MeshState.connectedDeviceAddress.postValue(null)
+            }
+
+            override fun onServicesDiscovered() {
+                MeshState.isConnected.postValue(true)
+                MeshState.connectedDeviceAddress.postValue(address)
+                MeshState.statusText.postValue("已连接到 $address")
+                saveProxyAddress(address)
+            }
+
+            override fun onDataReceived(data: ByteArray) {
+                MeshState.meshManagerApi.handleNotifications(23, data)
+            }
+
+            override fun onMeshMessageReceived(src: Int, data: ByteArray) {}
+
+            override fun onError(error: String) {
+                // 连接失败，尝试下一个地址
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    tryConnectToNextAddress(addresses, index + 1, onAllFailed)
+                }, 1000)
+            }
+        })
     }
     
     private fun getSavedProxyAddress(): String? {

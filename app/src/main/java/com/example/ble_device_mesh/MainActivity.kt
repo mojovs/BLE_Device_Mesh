@@ -110,6 +110,18 @@ class MainActivity : ComponentActivity() {
             }
         }
         
+        // 观察时间更新
+        viewModel.timeUpdates.observe(this) { (address, unixTime) ->
+            Log.d("MainActivity", "收到时间更新: 地址=0x${address.toString(16)}, 时间=$unixTime")
+            // 更新设备列表中对应设备的时间
+            val devices = deviceRepository.getAllDevices()
+            val device = devices.find { it.address == address }
+            if (device != null) {
+                device.deviceTime = unixTime
+                deviceRepository.updateDevice(device)
+            }
+        }
+        
         // 观察网络加载状态，加载完成后自动连接
         viewModel.isNetworkLoaded.observe(this) { loaded ->
             try {
