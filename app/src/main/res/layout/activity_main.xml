@@ -82,7 +82,11 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:padding="8dp"/>
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="4dp"
+        android:clipToPadding="false"
+        android:paddingBottom="4dp"/>
 
     <!-- 空状态提示 -->
     <LinearLayout

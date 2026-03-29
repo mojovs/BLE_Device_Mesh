@@ -73,7 +73,27 @@ class DeviceDetailActivity : ComponentActivity() {
         }
     }
     
+
+    private fun setupCollapsible(headerId: Int, bodyId: Int, iconId: Int, expanded: Boolean = true) {
+        val header = findViewById<View>(headerId)
+        val body = findViewById<View>(bodyId)
+        val icon = findViewById<TextView>(iconId)
+        body.visibility = if (expanded) View.VISIBLE else View.GONE
+        icon.text = if (expanded) "⌄" else "›"
+        header.setOnClickListener {
+            val isVisible = body.visibility == View.VISIBLE
+            body.visibility = if (isVisible) View.GONE else View.VISIBLE
+            icon.text = if (isVisible) "›" else "⌄"
+        }
+    }
+
     private fun setupViews() {
+        setupCollapsible(R.id.headerConnection, R.id.bodyConnection, R.id.iconConnection, true)
+        setupCollapsible(R.id.headerDeviceInfo, R.id.bodyDeviceInfo, R.id.iconDeviceInfo, true)
+        setupCollapsible(R.id.headerBrightness, R.id.bodyBrightness, R.id.iconBrightness, true)
+        setupCollapsible(R.id.headerTemperature, R.id.bodyTemperature, R.id.iconTemperature, false)
+        setupCollapsible(R.id.headerTime, R.id.bodyTime, R.id.iconTime, false)
+
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
         val btnBack = findViewById<TextView>(R.id.btnBack)
         val tvConnectionStatus = findViewById<TextView>(R.id.tvConnectionStatus)
@@ -87,7 +107,8 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
         
         // 设置标题
-        tvTitle.text = device.name
+        val savedMac = getDeviceMac(device.address)
+        tvTitle.text = if (savedMac != null) "${device.name}  $savedMac" else device.name
         
         // 返回按钮
         btnBack.setOnClickListener {
@@ -166,7 +187,6 @@ class DeviceDetailActivity : ComponentActivity() {
         }
         
         // 设备信息
-        val savedMac = getDeviceMac(device.address)
         tvDeviceInfo.text = if (savedMac != null) {
             """
             名称: ${device.name}
@@ -182,6 +202,45 @@ class DeviceDetailActivity : ComponentActivity() {
             """.trimIndent()
         }
         
+
+        // 菜单按钮
+        findViewById<TextView>(R.id.btnMenu).setOnClickListener { anchor ->
+            val popup = android.widget.PopupMenu(this, anchor)
+            popup.menu.add(0, 1, 0, "修改名称")
+            popup.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> {
+                        val input = android.widget.EditText(this).apply {
+                            setText(device.name)
+                            selectAll()
+                        }
+                        AlertDialog.Builder(this)
+                            .setTitle("修改设备名称")
+                            .setView(input)
+                            .setPositiveButton("确定") { _, _ ->
+                                val newName = input.text.toString().trim()
+                                if (newName.isNotEmpty() && newName != device.name) {
+                                    device.name = newName
+                                    deviceRepository.updateDevice(device)
+                                    val mac = getDeviceMac(device.address)
+                                    tvTitle.text = if (mac != null) "$newName  $mac" else newName
+                                    tvDeviceInfo.text = if (mac != null) {
+                                        "名称: $newName\n地址: 0x${device.address.toString(16).uppercase()}\n类型: ${getDeviceTypeName(device.type)}\nMAC: $mac"
+                                    } else {
+                                        "名称: $newName\n地址: 0x${device.address.toString(16).uppercase()}\n类型: ${getDeviceTypeName(device.type)}"
+                                    }
+                                    Toast.makeText(this, "名称已更新", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            popup.show()
+        }
         // 亮度控制
         val savedBrightness = getSavedBrightness(device.address)
         device.brightness = savedBrightness // Update memory object
@@ -326,12 +385,123 @@ class DeviceDetailActivity : ComponentActivity() {
                 deviceRepository.updateDevice(device)
             }
         }
+
+        // 定时开关（仅灯光设备）
+        if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
+            setupScheduleCard()
+        }
     }
     
     private fun observeViewModel() {
     }
     
-    private fun setupProxySpinner(spinner: Spinner) {
+
+    private fun setupScheduleCard() {
+        val cardSchedule = findViewById<androidx.cardview.widget.CardView>(R.id.cardSchedule)
+        cardSchedule.visibility = View.VISIBLE
+        setupCollapsible(R.id.headerSchedule, R.id.bodySchedule, R.id.iconSchedule, false)
+
+        val tvOnTime = findViewById<TextView>(R.id.tvOnTime)
+        val tvOffTime = findViewById<TextView>(R.id.tvOffTime)
+        val tvOnRepeat = findViewById<TextView>(R.id.tvOnRepeat)
+        val tvOffRepeat = findViewById<TextView>(R.id.tvOffRepeat)
+        val prefs = getSharedPreferences("SchedulePrefs", android.content.Context.MODE_PRIVATE)
+        val key = "device_${device.address}"
+
+        // 恢复已保存的时间和模式
+        tvOnTime.text = prefs.getString("${key}_on", null) ?: "未设置"
+        tvOffTime.text = prefs.getString("${key}_off", null) ?: "未设置"
+        tvOnRepeat.text = if (prefs.getBoolean("${key}_on_repeat", true)) "每天" else "单次"
+        tvOffRepeat.text = if (prefs.getBoolean("${key}_off_repeat", true)) "每天" else "单次"
+
+        // 点击切换模式
+        tvOnRepeat.setOnClickListener {
+            val repeat = prefs.getBoolean("${key}_on_repeat", true)
+            prefs.edit().putBoolean("${key}_on_repeat", !repeat).apply()
+            tvOnRepeat.text = if (!repeat) "每天" else "单次"
+        }
+        tvOffRepeat.setOnClickListener {
+            val repeat = prefs.getBoolean("${key}_off_repeat", true)
+            prefs.edit().putBoolean("${key}_off_repeat", !repeat).apply()
+            tvOffRepeat.text = if (!repeat) "每天" else "单次"
+        }
+
+        findViewById<android.widget.Button>(R.id.btnSetOnTime).setOnClickListener {
+            showTimePicker(true) { hour, minute ->
+                val timeStr = String.format("%02d:%02d", hour, minute)
+                tvOnTime.text = timeStr
+                prefs.edit().putString("${key}_on", timeStr).apply()
+                val repeat = prefs.getBoolean("${key}_on_repeat", true)
+                scheduleAlarm(true, hour, minute, repeat)
+            }
+        }
+        findViewById<android.widget.Button>(R.id.btnClearOnTime).setOnClickListener {
+            tvOnTime.text = "未设置"
+            prefs.edit().remove("${key}_on").apply()
+            cancelAlarm(true)
+        }
+        findViewById<android.widget.Button>(R.id.btnSetOffTime).setOnClickListener {
+            showTimePicker(false) { hour, minute ->
+                val timeStr = String.format("%02d:%02d", hour, minute)
+                tvOffTime.text = timeStr
+                prefs.edit().putString("${key}_off", timeStr).apply()
+                val repeat = prefs.getBoolean("${key}_off_repeat", true)
+                scheduleAlarm(false, hour, minute, repeat)
+            }
+        }
+        findViewById<android.widget.Button>(R.id.btnClearOffTime).setOnClickListener {
+            tvOffTime.text = "未设置"
+            prefs.edit().remove("${key}_off").apply()
+            cancelAlarm(false)
+        }
+    }
+
+    private fun showTimePicker(isOn: Boolean, onSet: (Int, Int) -> Unit) {
+        val cal = java.util.Calendar.getInstance()
+        android.app.TimePickerDialog(this, { _, hour, minute ->
+            onSet(hour, minute)
+            val label = if (isOn) "开机" else "关机"
+            Toast.makeText(this, "定时${label}已设置: ${String.format("%02d:%02d", hour, minute)}", Toast.LENGTH_SHORT).show()
+        }, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE), true).show()
+    }
+
+    private fun scheduleAlarm(turnOn: Boolean, hour: Int, minute: Int, repeat: Boolean) {
+        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = android.content.Intent(this, ScheduleReceiver::class.java).apply {
+            putExtra("device_address", device.address)
+            putExtra("turn_on", turnOn)
+            putExtra("brightness", device.brightness)
+        }
+        val requestCode = if (turnOn) device.address * 2 else device.address * 2 + 1
+        val pendingIntent = android.app.PendingIntent.getBroadcast(
+            this, requestCode, intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val cal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+            set(java.util.Calendar.SECOND, 0)
+            if (timeInMillis <= System.currentTimeMillis()) add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }
+        if (repeat) {
+            alarmManager.setRepeating(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, android.app.AlarmManager.INTERVAL_DAY, pendingIntent)
+        } else {
+            alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, pendingIntent)
+        }
+    }
+
+    private fun cancelAlarm(turnOn: Boolean) {
+        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = android.content.Intent(this, ScheduleReceiver::class.java)
+        val requestCode = if (turnOn) device.address * 2 else device.address * 2 + 1
+        val pendingIntent = android.app.PendingIntent.getBroadcast(
+            this, requestCode, intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
+    }
+
+        private fun setupProxySpinner(spinner: Spinner) {
         val history = viewModel.getProxyAddressHistory().toMutableList()
         
         // 添加"扫描新设备..."选项
@@ -376,10 +546,12 @@ class DeviceDetailActivity : ComponentActivity() {
             val index = history.indexOf(savedMac)
             spinner.setSelection(index)
         } else {
-            // 默认选择第一个
+            val defaultMac = history[0]
+            saveDeviceMac(device.address, defaultMac)
             spinner.setSelection(0)
+            findViewById<android.widget.TextView>(R.id.tvTitle).text = "${device.name}  $defaultMac"
         }
-        
+
         // 选择监听 - 保存设备 MAC 地址
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             private var isFirstSelection = true
@@ -394,6 +566,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 if (!selectedMac.isNullOrEmpty()) {
                     // 保存该设备的 MAC 地址
                     saveDeviceMac(device.address, selectedMac)
+                    findViewById<TextView>(R.id.tvTitle).text = "${device.name}  $selectedMac"
                     Toast.makeText(this@DeviceDetailActivity, "已保存设备 MAC: $selectedMac", Toast.LENGTH_SHORT).show()
                     
                     // 更新设备信息显示

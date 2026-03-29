@@ -6,7 +6,7 @@ import kotlinx.parcelize.Parcelize
 @Parcelize
 data class MeshDevice(
     val id: String,  // 唯一标识
-    val name: String,  // 设备名称
+    var name: String,  // 设备名称
     val address: Int,  // Mesh 地址 (例如 0x0005)
     val type: DeviceType,  // 设备类型
     var brightness: Int = 50,  // 当前亮度 0-100

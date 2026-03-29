@@ -23,7 +23,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     // 全局单例状态持有者
     // 使用 Object 来保存 Application 级别的状态，确保在不同 Activity 之间共享
-    private object MeshState {
+    internal object MeshState {
         var isInitialized = false
         lateinit var meshManagerApi: MeshManagerApi
         lateinit var bleConnection: BleConnectionManager
@@ -410,6 +410,20 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
     
+
+    fun sendOnOff(address: Int, on: Boolean, brightness: Int = 100) {
+        val network = MeshState.meshNetWork ?: return
+        val appKey = network.appKeys.firstOrNull() ?: return
+        val level = if (on) ((brightness - 50) * 655.35).toInt() else -32768
+        val message = GenericLevelSetUnacknowledged(appKey, level, MeshState.currentTid)
+        MeshState.currentTid++
+        try {
+            MeshState.meshManagerApi.createMeshPdu(address, message)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "sendOnOff 失败: ${e.message}")
+        }
+    }
+
     fun readTemperature(address: Int) {
         val network = MeshState.meshNetWork ?: run {
             Log.e("MeshApp", "Mesh 网络未初始化")

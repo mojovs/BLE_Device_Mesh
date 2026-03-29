@@ -9,7 +9,7 @@ import android.view.View
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.viewModels
-import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
@@ -37,7 +37,6 @@ class MainActivity : ComponentActivity() {
             
             setupViews()
             loadDevices()
-            startTemperaturePolling()
         } catch (e: Exception) {
             Log.e("MainActivity", "onCreate 严重错误: ${e.message}")
             e.printStackTrace()
@@ -69,10 +68,14 @@ class MainActivity : ComponentActivity() {
             },
             onDeleteClick = { device ->
                 showDeleteConfirmDialog(device)
+            },
+            onOrderChanged = { orderedDevices ->
+                deviceRepository.reorderDevices(orderedDevices)
             }
         )
-        rvDevices.layoutManager = LinearLayoutManager(this)
+        rvDevices.layoutManager = GridLayoutManager(this, 2)
         rvDevices.adapter = deviceAdapter
+        deviceAdapter.attachToRecyclerView(rvDevices)
         
         // 添加设备按钮
         btnAddDevice.setOnClickListener {
@@ -121,31 +124,7 @@ class MainActivity : ComponentActivity() {
                 deviceRepository.updateDevice(device)
             }
         }
-        
-        // 观察网络加载状态，加载完成后自动连接
-        viewModel.isNetworkLoaded.observe(this) { loaded ->
-            try {
-                if (loaded) {
-                    Log.d("MainActivity", "Mesh网络加载完毕，尝试自动连接...")
-                    val connected = viewModel.isConnected.value ?: false
-                    if (!connected) {
-                        try {
-                            if (viewModel.hasSavedProxyAddress()) {
-                                Log.d("MainActivity", "尝试连接保存的接入点")
-                                viewModel.connectToSavedProxy()
-                            } else {
-                                Log.d("MainActivity", "没有保存的接入点，扫描附近的 Proxy")
-                                viewModel.autoConnectToProxy()
-                            }
-                        } catch (e: Exception) {
-                            Log.e("MainActivity", "自动连接过程异常: ${e.message}")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "isNetworkLoaded 观察出错: ${e.message}")
-            }
-        }
+
     }
     
     private fun loadDevices() {

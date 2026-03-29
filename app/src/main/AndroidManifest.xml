@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     
     <!-- 蓝牙功能声明 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     
     <application
@@ -50,6 +54,10 @@
             android:name=".DeviceDetailActivity"
             android:exported="false"
             android:theme="@style/Theme.BLE_Device_Mesh"/>
+
+        <receiver
+            android:name=".ScheduleReceiver"
+            android:exported="false"/>
     </application>
 
 </manifest>

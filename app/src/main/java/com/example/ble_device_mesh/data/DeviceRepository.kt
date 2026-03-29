@@ -60,7 +60,10 @@ class DeviceRepository(context: Context) {
         return getAllDevices().find { it.id == deviceId }
     }
     
-    // 清除所有设备的温度数据
+    // 重新排序设备
+    fun reorderDevices(devices: List<MeshDevice>) {
+        saveDevices(devices)
+    }
     fun clearAllTemperatures() {
         val devices = getAllDevices().toMutableList()
         var updated = false
