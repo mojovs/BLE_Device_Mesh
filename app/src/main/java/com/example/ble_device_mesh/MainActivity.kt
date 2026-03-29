@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
         val btnAddDevice = findViewById<Button>(R.id.btnAddDevice)
         val rvDevices = findViewById<RecyclerView>(R.id.rvDevices)
+        val layoutTrashZone = findViewById<android.widget.LinearLayout>(R.id.layoutTrashZone)
         val layoutEmpty = findViewById<LinearLayout>(R.id.layoutEmpty)
         
         // 添加设置按钮（如果布局中有的话）
@@ -62,7 +63,7 @@ class MainActivity : ComponentActivity() {
         
         // 设备列表
         deviceAdapter = MeshDeviceAdapter(
-            emptyList(),
+            mutableListOf(),
             onDeviceClick = { device ->
                 openDeviceDetail(device)
             },
@@ -76,6 +77,13 @@ class MainActivity : ComponentActivity() {
         rvDevices.layoutManager = GridLayoutManager(this, 2)
         rvDevices.adapter = deviceAdapter
         deviceAdapter.attachToRecyclerView(rvDevices)
+
+        deviceAdapter.trashZoneView = layoutTrashZone
+        deviceAdapter.onEditModeChanged = { editing ->
+            layoutTrashZone.visibility = if (editing) android.view.View.VISIBLE else android.view.View.GONE
+        }
+
+
         
         // 添加设备按钮
         btnAddDevice.setOnClickListener {

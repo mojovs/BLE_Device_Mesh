@@ -92,6 +92,7 @@ class DeviceDetailActivity : ComponentActivity() {
         setupCollapsible(R.id.headerDeviceInfo, R.id.bodyDeviceInfo, R.id.iconDeviceInfo, true)
         setupCollapsible(R.id.headerBrightness, R.id.bodyBrightness, R.id.iconBrightness, true)
         setupCollapsible(R.id.headerTemperature, R.id.bodyTemperature, R.id.iconTemperature, false)
+        setupCollapsible(R.id.headerLightLevel, R.id.bodyLightLevel, R.id.iconLightLevel, false)
         setupCollapsible(R.id.headerTime, R.id.bodyTime, R.id.iconTime, false)
 
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
@@ -282,6 +283,21 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
         
+        // 光线亮度控制
+        val tvLightLevel = findViewById<TextView>(R.id.tvLightLevelValue)
+        val btnRefreshLightLevel = findViewById<Button>(R.id.btnRefreshLightLevel)
+        
+        device.lightLevel?.let { tvLightLevel.text = "${String.format("%.1f", it)} lux" }
+        
+        btnRefreshLightLevel.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.readTemperature(device.address)
+                Toast.makeText(this, "已发送光照读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
         // 时间同步控制
         val tvDeviceTime = findViewById<TextView>(R.id.tvDeviceTime)
         val btnReadTime = findViewById<Button>(R.id.btnReadTime)
@@ -330,6 +346,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnConnect.visibility = View.VISIBLE
                 btnAutoConnect.visibility = View.GONE
                 btnRefreshTemp.isEnabled = true
+                btnRefreshLightLevel.isEnabled = true
                 btnReadTime.isEnabled = true
                 btnSyncTime.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
@@ -341,6 +358,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnAutoConnect.visibility = View.VISIBLE
                 btnAutoConnect.isEnabled = true
                 btnRefreshTemp.isEnabled = false
+                btnRefreshLightLevel.isEnabled = false
                 btnReadTime.isEnabled = false
                 btnSyncTime.isEnabled = false
                 spinnerProxyAddress.isEnabled = true
@@ -371,6 +389,15 @@ class DeviceDetailActivity : ComponentActivity() {
                 // 更新当前设备对象的缓存值
                 device.temperature = temperature
                 // 持久化保存到 Repository，以便主界面也能看到最新温度
+                deviceRepository.updateDevice(device)
+            }
+        }
+        
+        // 观察光照度更新
+        viewModel.lightLevelUpdates.observe(this) { (address, lux) ->
+            if (address == device.address) {
+                tvLightLevel.text = "${String.format("%.1f", lux)} lux"
+                device.lightLevel = lux
                 deviceRepository.updateDevice(device)
             }
         }

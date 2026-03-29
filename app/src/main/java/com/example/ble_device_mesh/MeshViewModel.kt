@@ -34,6 +34,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val isConnected = MutableLiveData<Boolean>(false)
         val isNetworkLoaded = MutableLiveData<Boolean>(false)
         val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
+        val lightLevelUpdates = MutableLiveData<Pair<Int, Float>>()
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val scannedDevices = MutableLiveData<List<ScanResult>>(emptyList())
         val isScanning = MutableLiveData<Boolean>(false)
@@ -52,6 +53,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     val isConnected get() = MeshState.isConnected
     val isNetworkLoaded get() = MeshState.isNetworkLoaded
     val temperatureUpdates get() = MeshState.temperatureUpdates
+    val lightLevelUpdates get() = MeshState.lightLevelUpdates
     val timeUpdates get() = MeshState.timeUpdates
     val scannedDevices get() = MeshState.scannedDevices
     val isScanning get() = MeshState.isScanning
@@ -365,6 +367,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                        }
                        Log.d("MeshApp", "解析到温度: $tempVal (Src: 0x${src.toString(16)})")
                        MeshState.temperatureUpdates.postValue(Pair(src, tempVal))
+                    }
+                }
+
+                // 光照度属性 0x004E (Illuminance, 单位 0.01 lux, 3字节)
+                if (propertyId == 0x004E) {
+                    if (valueOffset + length <= data.size && length >= 3) {
+                        val raw = (data[valueOffset].toInt() and 0xFF) or
+                                  ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or
+                                  ((data[valueOffset + 2].toInt() and 0xFF) shl 16)
+                        val lux = raw * 0.01f
+                        Log.d("MeshApp", "解析到光照度: $lux lux (Src: 0x${src.toString(16)})")
+                        MeshState.lightLevelUpdates.postValue(Pair(src, lux))
                     }
                 }
             } catch (e: Exception) {

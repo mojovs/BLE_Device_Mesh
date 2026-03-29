@@ -1,125 +1,158 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#F5F5F5">
 
-    <!-- 顶部栏 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="@android:color/white"
-        android:elevation="4dp"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- 顶部栏 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="@android:color/white"
+            android:elevation="4dp"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="我的设备"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#333333"/>
+
+            <Button
+                android:id="@+id/btnSettings"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:text="设置"
+                android:textSize="14sp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:minWidth="0dp"
+                style="?android:attr/borderlessButtonStyle"/>
+
+            <Button
+                android:id="@+id/btnAddDevice"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:text="+ 添加"
+                android:textSize="14sp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:minWidth="0dp"/>
+
+        </LinearLayout>
+
+        <!-- 状态栏 -->
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="状态: 正在初始化 Mesh..."
+            android:textSize="12sp"
+            android:textColor="#999999"
+            android:paddingStart="12dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="4dp"
+            android:background="#FFFDE7"/>
 
         <TextView
-            android:layout_width="0dp"
+            android:id="@+id/tvSrcAddress"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="本机地址: --"
+            android:textSize="12sp"
+            android:textColor="#666666"
+            android:paddingStart="12dp"
+            android:paddingTop="0dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="12dp"
+            android:background="#FFFDE7"/>
+
+        <!-- 设备列表 -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvDevices"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
             android:layout_weight="1"
-            android:text="我的设备"
-            android:textSize="20sp"
-            android:textStyle="bold"
-            android:textColor="#333333"/>
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="4dp"
+            android:clipToPadding="false"
+            android:paddingBottom="4dp"/>
 
-        <Button
-            android:id="@+id/btnSettings"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:text="设置"
-            android:textSize="14sp"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:minWidth="0dp"
-            style="?android:attr/borderlessButtonStyle"/>
-        
+        <!-- 空状态提示 -->
+        <LinearLayout
+            android:id="@+id/layoutEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:visibility="gone">
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="📱"
+                android:textSize="64sp"/>
 
-        <Button
-            android:id="@+id/btnAddDevice"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:text="+ 添加"
-            android:textSize="14sp"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:minWidth="0dp"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="还没有添加设备"
+                android:textSize="16sp"
+                android:textColor="#666666"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="点击右上角添加设备"
+                android:textSize="14sp"
+                android:textColor="#999999"/>
+
+        </LinearLayout>
 
     </LinearLayout>
 
-    <!-- 状态栏 -->
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="状态: 正在初始化 Mesh..."
-        android:textSize="12sp"
-        android:textColor="#999999"
-        android:paddingStart="12dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="4dp"
-        android:background="#FFFDE7"/>
-
-    <TextView
-        android:id="@+id/tvSrcAddress"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="本机地址: --"
-        android:textSize="12sp"
-        android:textColor="#666666"
-        android:paddingStart="12dp"
-        android:paddingTop="0dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="12dp"
-        android:background="#FFFDE7"/>
-
-    <!-- 设备列表 -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvDevices"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:paddingStart="4dp"
-        android:paddingEnd="4dp"
-        android:paddingTop="4dp"
-        android:clipToPadding="false"
-        android:paddingBottom="4dp"/>
-
-    <!-- 空状态提示 -->
+    <!-- 垃圾桶区域：悬浮在最顶部，编辑模式下显示 -->
     <LinearLayout
-        android:id="@+id/layoutEmpty"
+        android:id="@+id/layoutTrashZone"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="vertical"
+        android:layout_height="80dp"
+        android:layout_gravity="top"
+        android:orientation="horizontal"
         android:gravity="center"
+        android:background="#BBEE3333"
+        android:elevation="8dp"
         android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="📱"
-            android:textSize="64sp"/>
+            android:text="🗑"
+            android:textSize="32sp"/>
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="还没有添加设备"
+            android:layout_marginStart="10dp"
+            android:text="拖到此处删除"
             android:textSize="16sp"
-            android:textColor="#666666"/>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="点击右上角添加设备"
-            android:textSize="14sp"
-            android:textColor="#999999"/>
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"/>
 
     </LinearLayout>
 
-</LinearLayout>
+</FrameLayout>
