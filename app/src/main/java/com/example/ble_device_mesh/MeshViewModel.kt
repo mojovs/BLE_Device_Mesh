@@ -18,6 +18,7 @@ import no.nordicsemi.android.mesh.transport.SensorStatus
 import no.nordicsemi.android.mesh.transport.TimeGet
 import no.nordicsemi.android.mesh.transport.TimeSet
 import no.nordicsemi.android.mesh.transport.TimeStatus
+import kotlin.math.pow
 
 class MeshViewModel(application: Application): AndroidViewModel(application) {
 
@@ -335,11 +336,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 if (format == 0) {
                     // Format A
                     if (offset + 1 >= data.size) break
-                    val lenCode = (byte0 shr 3) and 0xF
-                    length = if (lenCode == 0xF) 1 else lenCode + 1 
-                    val propIdMsb = byte0 and 0x7
-                    val propIdLsb = data[offset + 1].toInt() and 0xFF
-                    propertyId = (propIdMsb shl 8) or propIdLsb
+                    val lenCode = (byte0 shr 1) and 0xF
+                    length = if (lenCode == 0xF) 0 else lenCode + 1 
+                    val propIdLow = (byte0 shr 5) and 0x7
+                    val propIdHigh = data[offset + 1].toInt() and 0xFF
+                    propertyId = (propIdHigh shl 3) or propIdLow
                     valueOffset = offset + 2
                     offset += 2 + length
                 } else {
@@ -354,13 +355,13 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 
                 Log.d("MeshApp", "Standard PropID: 0x${propertyId.toString(16)}, Length: $length")
                 
-                // 温度属性 0x004F
-                if (propertyId == 0x004F) {
+                // 温度属性 0x004F / 0x2809 / 0x0071 (Present Indoor Ambient Temperature)
+                if (propertyId == 0x004F || propertyId == 0x2809 || propertyId == 0x0071) {
                     if (valueOffset + length <= data.size) {
                        var tempVal = 0.0f
                        if (length == 1) {
                            val raw = data[valueOffset].toByte()
-                           tempVal = raw * 0.5f 
+                           tempVal = raw * 0.5f
                        } else if (length == 2) {
                            val raw = ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or (data[valueOffset].toInt() and 0xFF)
                            tempVal = raw.toShort() * 0.01f
@@ -399,7 +400,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             return
         }
         
-        val level = ((brightness - 50) * 655.35).toInt()
+        // 应用亮度映射曲线，补偿 OC6701 的非线性特性
+        val mappedBrightness = mapBrightnessForOC6701(brightness)
+        val level = ((mappedBrightness - 50) * 655.35).toInt()
         
         // 尝试通过反射获取源地址用于日志（可选）
         var srcAddress = 0
@@ -410,7 +413,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         } catch (e: Exception) {}
 
         val info = "Src:0x${srcAddress.toString(16)} Dst:0x${address.toString(16)} TID:${MeshState.currentTid}"
-        Log.d("MeshApp", "发送亮度控制: $info, brightness=$brightness%, level=$level")
+        Log.d("MeshApp", "发送亮度控制: $info, UI=$brightness%, mapped=$mappedBrightness%, level=$level")
         
         val message = GenericLevelSetUnacknowledged(appKey, level, MeshState.currentTid)
         MeshState.currentTid++
@@ -422,6 +425,25 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
              Log.e("MeshApp", "创建亮度 PDU 失败: ${e.message}")
              MeshState.statusText.postValue("发送失败: ${e.message}")
         }
+    }
+    
+    /**
+     * OC6701 亮度映射曲线
+     * 由于 OC6701 在 0-20% 亮度变化大，20-100% 变化小
+     * 使用 1.5 次方曲线，比平方根更温和
+     * 
+     * @param uiBrightness UI 显示的亮度值 (0-100)
+     * @return 映射后发送给硬件的亮度值 (0-100)
+     */
+    private fun mapBrightnessForOC6701(uiBrightness: Int): Int {
+        if (uiBrightness <= 0) return 0
+        if (uiBrightness >= 100) return 100
+        
+        // 1.5次方曲线：y = (x/100)^1.5 * 100
+        // UI 1% -> 1%, UI 10% -> 3%, UI 25% -> 13%, UI 50% -> 35%, UI 100% -> 100%
+        val x = uiBrightness / 100.0
+        val mapped = x.pow(1.5) * 100
+        return mapped.toInt().coerceIn(0, 100)
     }
     
 

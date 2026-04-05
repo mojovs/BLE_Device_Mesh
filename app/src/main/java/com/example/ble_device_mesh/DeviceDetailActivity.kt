@@ -16,6 +16,7 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -30,7 +31,7 @@ class DeviceDetailActivity : ComponentActivity() {
     private lateinit var device: MeshDevice
     private lateinit var scanAdapter: DeviceAdapter
     private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
-    private var isUserSelection = false  // 标记是否是用户主动选择
+    private var isInitialSelection = true  // 标记是否是初始化时的选择
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
@@ -105,6 +106,8 @@ class DeviceDetailActivity : ComponentActivity() {
         val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
+        val btnBrightnessDown = findViewById<Button>(R.id.btnBrightnessDown)
+        val btnBrightnessUp = findViewById<Button>(R.id.btnBrightnessUp)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
         
         // 设置标题
@@ -125,39 +128,46 @@ class DeviceDetailActivity : ComponentActivity() {
         // Spinner 选择监听 - 自动连接
         spinnerProxyAddress.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                // 只有用户主动选择时才触发连接
-                if (!isUserSelection) {
-                    isUserSelection = true
+                Log.d("DeviceDetailActivity", "onItemSelected 被调用: position=$position, isInitialSelection=$isInitialSelection")
+                
+                // 跳过初始化时的自动触发
+                if (isInitialSelection) {
+                    isInitialSelection = false
+                    Log.d("DeviceDetailActivity", "跳过初始选择")
                     return
                 }
                 
                 val selectedItem = spinnerProxyAddress.selectedItem?.toString()
+                Log.d("DeviceDetailActivity", "选择的项: $selectedItem")
                 
                 // 避免在初始化时触发连接
-                if (selectedItem.isNullOrEmpty()) return
+                if (selectedItem.isNullOrEmpty() || selectedItem == "未连接") return
                 
                 // 如果选择的是当前已连接的地址，不重复连接
                 val currentAddress = viewModel.connectedDeviceAddress.value
                 if (selectedItem == currentAddress) {
+                    Log.d("DeviceDetailActivity", "已经连接到该地址")
                     return
                 }
                 
-                if (selectedItem == "扫描新设备...") {
-                    showProxyScanDialog()
-                } else {
-                    // 选择了历史 MAC 地址，自动连接
-                    viewModel.connectToAddress(selectedItem)
-                }
+                // 选择了历史 MAC 地址，自动连接
+                viewModel.connectToAddress(selectedItem)
             }
             
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+        
+        // 扫描按钮
+        val btnScanProxy = findViewById<Button>(R.id.btnScanProxy)
+        btnScanProxy.setOnClickListener {
+            showProxyScanDialog()
         }
         
         // 连接按钮改为断开按钮
         btnConnect.setOnClickListener {
             if (viewModel.isConnected.value == true) {
                 // 断开前，禁用自动连接
-                isUserSelection = false
+                isInitialSelection = true
                 viewModel.disconnectDevice()
             }
         }
@@ -268,6 +278,32 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         })
         
+        // 亮度减少按钮（每次 -1%）
+        btnBrightnessDown.setOnClickListener {
+            val currentProgress = seekBarBrightness.progress
+            if (currentProgress > 0) {
+                val newProgress = currentProgress - 1
+                seekBarBrightness.progress = newProgress
+                tvBrightnessValue.text = "$newProgress%"
+                viewModel.sendBrightness(device.address, newProgress)
+                saveBrightness(device.address, newProgress)
+                device.brightness = newProgress
+            }
+        }
+        
+        // 亮度增加按钮（每次 +1%）
+        btnBrightnessUp.setOnClickListener {
+            val currentProgress = seekBarBrightness.progress
+            if (currentProgress < 100) {
+                val newProgress = currentProgress + 1
+                seekBarBrightness.progress = newProgress
+                tvBrightnessValue.text = "$newProgress%"
+                viewModel.sendBrightness(device.address, newProgress)
+                saveBrightness(device.address, newProgress)
+                device.brightness = newProgress
+            }
+        }
+        
         // 温度控制
         val tvTemperature = findViewById<TextView>(R.id.tvTemperatureValue)
         val btnRefreshTemp = findViewById<Button>(R.id.btnRefreshTemp)
@@ -364,7 +400,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 spinnerProxyAddress.isEnabled = true
                 
                 // 刷新 Spinner 列表（可能有新的历史记录）
-                isUserSelection = false  // 重置标志，避免自动触发连接
+                isInitialSelection = true  // 重置标志，避免自动触发连接
                 setupProxySpinner(spinnerProxyAddress)
             }
         }
@@ -376,7 +412,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 val history = viewModel.getProxyAddressHistory()
                 val index = history.indexOf(address)
                 if (index >= 0) {
-                    isUserSelection = false  // 防止触发自动连接
+                    isInitialSelection = true  // 防止触发自动连接
                     spinnerProxyAddress.setSelection(index)
                 }
             }
@@ -531,11 +567,11 @@ class DeviceDetailActivity : ComponentActivity() {
         private fun setupProxySpinner(spinner: Spinner) {
         val history = viewModel.getProxyAddressHistory().toMutableList()
         
-        // 添加"扫描新设备..."选项
+        // 只显示历史地址
         val items = if (history.isEmpty()) {
-            listOf("扫描新设备...")
+            listOf("未连接")
         } else {
-            history + "扫描新设备..."
+            history
         }
         
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items)
@@ -551,6 +587,9 @@ class DeviceDetailActivity : ComponentActivity() {
             // 默认选择第一个历史地址
             spinner.setSelection(0)
         }
+        
+        // 重置标志，因为 setAdapter 会触发 onItemSelected
+        isInitialSelection = true
     }
     
     private fun setupDeviceMacSpinner(spinner: Spinner) {
@@ -651,16 +690,22 @@ class DeviceDetailActivity : ComponentActivity() {
     }
     
     private fun showProxyScanDialog() {
+        Log.d("DeviceDetailActivity", "showProxyScanDialog 被调用")
+        
         // 检查权限
         if (!hasAllPermissions()) {
+            Log.d("DeviceDetailActivity", "权限不足，请求权限")
             checkAndRequestPermissions()
             return
         }
         
         // 检查蓝牙
         if (!checkBluetoothEnabled()) {
+            Log.d("DeviceDetailActivity", "蓝牙未开启")
             return
         }
+        
+        Log.d("DeviceDetailActivity", "权限和蓝牙检查通过，显示扫描对话框")
         
         val dialogView = LayoutInflater.from(this).inflate(R.layout.item_device, null)
         val rvProxyDevices = RecyclerView(this).apply {
