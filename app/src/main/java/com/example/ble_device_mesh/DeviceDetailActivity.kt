@@ -312,8 +312,8 @@ class DeviceDetailActivity : ComponentActivity() {
         
         btnRefreshTemp.setOnClickListener {
             if (viewModel.isConnected.value == true) {
-                viewModel.readTemperature(device.address)
-                Toast.makeText(this, "已发送温度读取请求", Toast.LENGTH_SHORT).show()
+                viewModel.readSensors(device.address)
+                Toast.makeText(this, "已发送传感器读取请求", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }
@@ -324,11 +324,12 @@ class DeviceDetailActivity : ComponentActivity() {
         val btnRefreshLightLevel = findViewById<Button>(R.id.btnRefreshLightLevel)
         
         device.lightLevel?.let { tvLightLevel.text = "${String.format("%.1f", it)} lux" }
+            ?: run { tvLightLevel.text = "-- lux" }
         
         btnRefreshLightLevel.setOnClickListener {
             if (viewModel.isConnected.value == true) {
-                viewModel.readTemperature(device.address)
-                Toast.makeText(this, "已发送光照读取请求", Toast.LENGTH_SHORT).show()
+                viewModel.readSensors(device.address)
+                Toast.makeText(this, "已发送传感器读取请求", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }

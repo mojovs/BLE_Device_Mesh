@@ -253,19 +253,19 @@ class MainActivity : ComponentActivity() {
                 if (isFinishing || isDestroyed) return
                 
                 val connected = viewModel.isConnected.value == true
-                // Log.d("MainActivity", "温度轮询检查 - 连接状态: $connected")
+                // Log.d("MainActivity", "传感器轮询检查 - 连接状态: $connected")
                 
                 if (connected) {
                     val devices = deviceRepository.getAllDevices()
                     if (devices.isNotEmpty()) {
-                        Log.d("MainActivity", "读取 ${devices.size} 个设备的温度...")
+                        Log.d("MainActivity", "读取 ${devices.size} 个设备的传感器数据...")
                         devices.forEach { device ->
-                            viewModel.readTemperature(device.address)
+                            viewModel.readSensors(device.address)
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e("MainActivity", "温度轮询出错: ${e.message}")
+                Log.e("MainActivity", "传感器轮询出错: ${e.message}")
             } finally {
                 handler.postDelayed(this, 30000) // 30秒后再次执行
             }
@@ -273,7 +273,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startTemperaturePolling() {
-        Log.d("MainActivity", "启动温度轮询")
+        Log.d("MainActivity", "启动传感器轮询")
         handler.removeCallbacks(temperatureRunnable) // 避免重复
         
         // 5秒后每次执行

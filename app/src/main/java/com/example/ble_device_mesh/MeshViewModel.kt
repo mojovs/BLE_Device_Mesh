@@ -371,14 +371,20 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     }
                 }
 
-                // 光照度属性 0x004E (Illuminance, 单位 0.01 lux, 3字节)
+                // 光照度属性 0x004E (Present Ambient Light Level)
+                // 固件直接存储原始ADC值（0-255），3字节uint24格式
                 if (propertyId == 0x004E) {
                     if (valueOffset + length <= data.size && length >= 3) {
+                        // 读取3字节小端序数据
                         val raw = (data[valueOffset].toInt() and 0xFF) or
                                   ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or
                                   ((data[valueOffset + 2].toInt() and 0xFF) shl 16)
-                        val lux = raw * 0.01f
-                        Log.d("MeshApp", "解析到光照度: $lux lux (Src: 0x${src.toString(16)})")
+                        
+                        // 固件存储的是原始ADC值，这里进行简单映射到lux
+                        // 假设：ADC 0-255 映射到 0-10000 lux
+                        val lux = raw * 10000.0f / 255.0f
+                        
+                        Log.d("MeshApp", "解析到光照度: raw=$raw, lux=$lux (Src: 0x${src.toString(16)})")
                         MeshState.lightLevelUpdates.postValue(Pair(src, lux))
                     }
                 }
@@ -460,7 +466,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
 
-    fun readTemperature(address: Int) {
+    fun readSensors(address: Int) {
         val network = MeshState.meshNetWork ?: run {
             Log.e("MeshApp", "Mesh 网络未初始化")
             return
@@ -471,16 +477,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
              return
         }
         
-        Log.d("MeshApp", "读取温度: address=0x${address.toString(16)}")
+        Log.d("MeshApp", "读取传感器数据: address=0x${address.toString(16)}")
+        // SensorGet(appKey, null) 表示读取所有传感器（温度+光照）
         val message = SensorGet(appKey, null)
         
         try {
             MeshState.meshManagerApi.createMeshPdu(address, message)
         } catch (e: Exception) {
-             Log.e("MeshApp", "创建温度 PDU 失败: ${e.message}")
-             MeshState.statusText.postValue("读取温度失败: ${e.message}")
+             Log.e("MeshApp", "创建传感器读取 PDU 失败: ${e.message}")
+             MeshState.statusText.postValue("读取传感器失败: ${e.message}")
         }
     }
+    
+    // 兼容旧代码，保留readTemperature作为别名
+    @Deprecated("使用 readSensors 代替", ReplaceWith("readSensors(address)"))
+    fun readTemperature(address: Int) = readSensors(address)
     
     // 读取设备时间
     fun readDeviceTime(address: Int) {
@@ -520,20 +531,19 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 获取当前 Unix 时间戳（秒）
         val currentTime = System.currentTimeMillis() / 1000
         
-        Log.d("MeshApp", "设置设备时间: address=0x${address.toString(16)}, time=$currentTime")
-        
-        // TAI 时间 = Unix 时间 + 37秒（2017年1月1日的偏移）
+        // TAI 时间 = Unix 时间 + 37秒（TAI-UTC差值）
         val taiSeconds = (currentTime + 37).toInt()
         
+        Log.d("MeshApp", "设置设备时间: address=0x${address.toString(16)}, Unix=$currentTime, TAI=$taiSeconds")
+        
         // 创建 MeshTAITime 对象
-        // 参数: taiSeconds, subSecond, uncertainty, timeAuthority, tai_utc_delta, timeZoneOffset
         val taiTime = no.nordicsemi.android.mesh.MeshTAITime(
             taiSeconds,  // TAI 秒数
             0,           // 亚秒 (0-255)
             0,           // 不确定性
-            false,       // 时间权威性 (Boolean)
-            0,           // TAI-UTC 差值
-            0            // 时区偏移
+            false,       // 时间权威性
+            37,          // TAI-UTC 差值（2024年）
+            32           // 时区偏移 UTC+8 = 8*4 = 32（单位：15分钟）
         )
         
         // TimeSet 参数：appKey, MeshTAITime对象
