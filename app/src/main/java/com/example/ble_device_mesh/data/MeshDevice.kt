@@ -7,8 +7,9 @@ import kotlinx.parcelize.Parcelize
 data class MeshDevice(
     val id: String,  // 唯一标识
     var name: String,  // 设备名称
-    val address: Int,  // Mesh 地址 (例如 0x0005)
+    val address: Int,  // Mesh Unicast 地址 (例如 0x0099)
     val type: DeviceType,  // 设备类型
+    var groupAddress: Int? = null,  // Group 地址 (例如 0x0200)，用于控制设备
     var brightness: Int = 50,  // 当前亮度 0-100
     var temperature: Float? = null,  // 当前温度（摄氏度）
     var deviceTime: Long? = null,  // 设备时间（Unix 时间戳，秒）

@@ -6,9 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.ble_device_mesh"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.ble_device_mesh"
@@ -56,7 +54,7 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
 
     // Mesh 协议栈核心库
-    implementation("no.nordicsemi.android:mesh:3.3.0")
+    implementation("no.nordicsemi.android:mesh:3.4.0")  // 最新版本
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

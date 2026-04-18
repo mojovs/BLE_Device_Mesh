@@ -29,21 +29,14 @@ class MainActivity : ComponentActivity() {
             deviceRepository = DeviceRepository(this)
             
             // 清除旧的温度数据，避免显示过期的信息
-            try {
-                deviceRepository.clearAllTemperatures()
-            } catch (e: Exception) {
-                Log.e("MainActivity", "清除温度失败: ${e.message}")
-            }
+            deviceRepository.clearAllTemperatures()
             
             setupViews()
             loadDevices()
         } catch (e: Exception) {
             Log.e("MainActivity", "onCreate 严重错误: ${e.message}")
             e.printStackTrace()
-            // 尝试显示 Toast
-            try {
-                 Toast.makeText(this, "应用启动异常: ${e.message}", Toast.LENGTH_LONG).show()
-            } catch (e2: Exception) {}
+            Toast.makeText(this, "应用启动异常: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
     
@@ -85,9 +78,23 @@ class MainActivity : ComponentActivity() {
 
 
         
-        // 添加设备按钮
+        // 配网设备按钮
+        btnAddDevice.text = "配网设备"
         btnAddDevice.setOnClickListener {
-            showAddDeviceDialog()
+            startActivity(Intent(this, ProvisionActivity::class.java))
+        }
+        
+        // 底部导航栏
+        findViewById<LinearLayout>(R.id.navHome).setOnClickListener {
+            // 已在主页
+        }
+        
+        findViewById<LinearLayout>(R.id.navSettings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        
+        findViewById<LinearLayout>(R.id.navProfile).setOnClickListener {
+            Toast.makeText(this, "我的页面开发中", Toast.LENGTH_SHORT).show()
         }
         
         // 观察状态
@@ -244,6 +251,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         loadDevices()
+        startTemperaturePolling()
     }
     
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -280,6 +288,11 @@ class MainActivity : ComponentActivity() {
         handler.postDelayed(temperatureRunnable, 5000)
     }
     
+    override fun onPause() {
+        super.onPause()
+        handler.removeCallbacks(temperatureRunnable)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(temperatureRunnable)

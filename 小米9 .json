@@ -4,7 +4,7 @@
   "version": "1.0.1",
   "meshUUID": "7BBCA295-5F49-4C79-9231-3CB340D5DBC2",
   "meshName": "小米9",
-  "timestamp": "2026-03-31T01:07:52+08:00",
+  "timestamp": "2026-04-14T22:27:33+08:00",
   "partial": false,
   "netKeys": [
     {
@@ -13,7 +13,7 @@
       "key": "21AC250562E2882B93C3BCCD6B9873CE",
       "phase": 0,
       "minSecurity": "insecure",
-      "timestamp": "2026-03-30T15:06:58+08:00"
+      "timestamp": "2026-04-14T22:27:34+08:00"
     }
   ],
   "appKeys": [
@@ -92,74 +92,9 @@
       "excluded": false
     },
     {
-      "UUID": "848E00F5-17C8-0000-0000-000000000000",
-      "name": "灯4",
-      "deviceKey": "D750A22859F64B1B2B0B1B7019ACC66F",
-      "unicastAddress": "0014",
-      "security": "insecure",
-      "configComplete": false,
-      "cid": "07D7",
-      "pid": "0000",
-      "vid": "0000",
-      "crpl": "0014",
-      "features": {
-        "friend": 2,
-        "lowPower": 2,
-        "proxy": 0,
-        "relay": 0
-      },
-      "defaultTTL": 3,
-      "netKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "appKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "elements": [
-        {
-          "name": "Element: 0x0014",
-          "index": 0,
-          "location": "0000",
-          "models": [
-            {
-              "modelId": "0000",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "0002",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "1002",
-              "bind": [
-                0
-              ],
-              "subscribe": []
-            },
-            {
-              "modelId": "1100",
-              "bind": [
-                0
-              ],
-              "subscribe": []
-            }
-          ]
-        }
-      ],
-      "excluded": false
-    },
-    {
-      "UUID": "0FB28AF5-17C8-0000-0000-000000000000",
+      "UUID": "88A765F5-17C8-0000-0000-000000000000",
       "name": "灯3",
-      "deviceKey": "9ECA962B7AA2112189710C2ED17FEAE1",
+      "deviceKey": "583DDA0C9EACF902100F8A088D2355BD",
       "unicastAddress": "0013",
       "security": "insecure",
       "configComplete": false,
@@ -215,70 +150,22 @@
                 0
               ],
               "subscribe": []
-            }
-          ]
-        }
-      ],
-      "excluded": false
-    },
-    {
-      "UUID": "888E00F5-17C8-0000-0000-000000000000",
-      "name": "灯2",
-      "deviceKey": "5B9D750A784D1CEED57D416D4165E6A6",
-      "unicastAddress": "0012",
-      "security": "insecure",
-      "configComplete": false,
-      "cid": "07D7",
-      "pid": "0000",
-      "vid": "0000",
-      "crpl": "0014",
-      "features": {
-        "friend": 2,
-        "lowPower": 2,
-        "proxy": 0,
-        "relay": 0
-      },
-      "defaultTTL": 3,
-      "netKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "appKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "elements": [
-        {
-          "name": "Element: 0x0012",
-          "index": 0,
-          "location": "0000",
-          "models": [
-            {
-              "modelId": "0000",
-              "bind": [],
-              "subscribe": []
             },
             {
-              "modelId": "0002",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "1002",
+              "modelId": "1200",
               "bind": [
                 0
               ],
               "subscribe": []
             },
             {
-              "modelId": "1100",
-              "bind": [
-                0
-              ],
+              "modelId": "1206",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "1207",
+              "bind": [],
               "subscribe": []
             }
           ]
@@ -287,9 +174,9 @@
       "excluded": false
     },
     {
-      "UUID": "8B8E00F5-17C8-0000-0000-000000000000",
+      "UUID": "13B28AF5-17C8-0000-0000-000000000000",
       "name": "灯1",
-      "deviceKey": "B21AD8192A4FCA5631AE537B96D58FAC",
+      "deviceKey": "E577E2C365A3788A9875729831AF5402",
       "unicastAddress": "0011",
       "security": "insecure",
       "configComplete": false,
@@ -374,9 +261,9 @@
     },
     {
       "UUID": "50AC8AF5-17C8-0000-0000-000000000000",
-      "name": "灯5",
-      "deviceKey": "ACFB668850AAB40E6060AAAB27A0C806",
-      "unicastAddress": "0015",
+      "name": "灯2",
+      "deviceKey": "595AEDE3B069F515364039C92E750C22",
+      "unicastAddress": "0012",
       "security": "insecure",
       "configComplete": false,
       "cid": "07D7",
@@ -404,7 +291,7 @@
       ],
       "elements": [
         {
-          "name": "Element: 0x0015",
+          "name": "Element: 0x0012",
           "index": 0,
           "location": "0000",
           "models": [
@@ -451,100 +338,6 @@
               "bind": [
                 0
               ],
-              "subscribe": []
-            }
-          ]
-        }
-      ],
-      "excluded": false
-    },
-    {
-      "UUID": "13B28AF5-17C8-0000-0000-000000000000",
-      "name": "灯6",
-      "deviceKey": "D397613ADCAF0A8847BA76337A5E5CDE",
-      "unicastAddress": "0016",
-      "security": "insecure",
-      "configComplete": false,
-      "cid": "07D7",
-      "pid": "0000",
-      "vid": "0000",
-      "crpl": "0014",
-      "features": {
-        "friend": 2,
-        "lowPower": 2,
-        "proxy": 0,
-        "relay": 0
-      },
-      "defaultTTL": 3,
-      "netKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "appKeys": [
-        {
-          "index": 0,
-          "updated": false
-        }
-      ],
-      "elements": [
-        {
-          "name": "Element: 0x0016",
-          "index": 0,
-          "location": "0000",
-          "models": [
-            {
-              "modelId": "0000",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "0002",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "1002",
-              "bind": [
-                0
-              ],
-              "subscribe": []
-            },
-            {
-              "modelId": "1100",
-              "bind": [
-                0
-              ],
-              "subscribe": [],
-              "publish": {
-                "address": "FFFF",
-                "index": 0,
-                "ttl": 255,
-                "period": {
-                  "numberOfSteps": 0,
-                  "resolution": 100
-                },
-                "retransmit": {
-                  "count": 1,
-                  "interval": 100
-                },
-                "credentials": 0
-              }
-            },
-            {
-              "modelId": "1200",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "1206",
-              "bind": [],
-              "subscribe": []
-            },
-            {
-              "modelId": "1207",
-              "bind": [],
               "subscribe": []
             }
           ]

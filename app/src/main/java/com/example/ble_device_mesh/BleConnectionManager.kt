@@ -33,6 +33,7 @@ class BleConnectionManager(private val context: Context) {
         fun onServicesDiscovered()
         fun onDataReceived(data: ByteArray)
         fun onMeshMessageReceived(src: Int, data: ByteArray)
+        fun onRssiRead(rssi: Int)
         fun onError(error: String)
     }
     
@@ -249,6 +250,17 @@ class BleConnectionManager(private val context: Context) {
                 Log.e("BleConnection", "数据写入失败: $status")
             }
         }
+        
+        override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                listener?.onRssiRead(rssi)
+            }
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    fun readRssi() {
+        bluetoothGatt?.readRemoteRssi()
     }
     
     fun isConnected(): Boolean {

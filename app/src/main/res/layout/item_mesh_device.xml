@@ -75,6 +75,17 @@
             android:textColor="#FF5722"
             android:visibility="gone"/>
 
+        <!-- 光照度 -->
+        <TextView
+            android:id="@+id/tvLightLevel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="100.0 lux"
+            android:textSize="12sp"
+            android:textColor="#FFC107"
+            android:visibility="gone"/>
+
         <!-- 状态图标行 -->
         <LinearLayout
             android:layout_width="wrap_content"

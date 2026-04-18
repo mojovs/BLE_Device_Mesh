@@ -12,6 +12,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -67,12 +68,19 @@ class DeviceDetailActivity : ComponentActivity() {
         setupViews()
         observeViewModel()
         
-        // 自动连接上次的 Proxy
-        if (viewModel.isConnected.value != true && viewModel.hasSavedProxyAddress()) {
-            Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
-            viewModel.connectToSavedProxy()
-        }
-    }
+        
+        // 优先连接该设备的 MAC 地址
+        if (viewModel.isConnected.value != true) {
+            val deviceMac = getDeviceMac(device.address)
+            if (deviceMac != null) {
+                Toast.makeText(this, "正在连接设备 $deviceMac...", Toast.LENGTH_SHORT).show()
+                viewModel.connectToAddress(deviceMac)
+            } else if (viewModel.hasSavedProxyAddress()) {
+                // 如果设备没有保存 MAC，再尝试上次连接的地址
+                Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
+                viewModel.connectToSavedProxy()
+            }
+        }    }
     
 
     private fun setupCollapsible(headerId: Int, bodyId: Int, iconId: Int, expanded: Boolean = true) {
@@ -99,24 +107,59 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
         val btnBack = findViewById<TextView>(R.id.btnBack)
         val tvConnectionStatus = findViewById<TextView>(R.id.tvConnectionStatus)
+        val tvSignalStrength = findViewById<TextView>(R.id.tvSignalStrength)
         val spinnerProxyAddress = findViewById<Spinner>(R.id.spinnerProxyAddress)
         val btnConnect = findViewById<Button>(R.id.btnConnect)
         val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
         val tvDeviceInfo = findViewById<TextView>(R.id.tvDeviceInfo)
         val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
+        val etGroupAddress = findViewById<EditText>(R.id.etGroupAddress)
+        val btnSaveGroupAddress = findViewById<Button>(R.id.btnSaveGroupAddress)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
         val btnBrightnessDown = findViewById<Button>(R.id.btnBrightnessDown)
         val btnBrightnessUp = findViewById<Button>(R.id.btnBrightnessUp)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
-        
+
         // 设置标题
         val savedMac = getDeviceMac(device.address)
         tvTitle.text = if (savedMac != null) "${device.name}  $savedMac" else device.name
-        
+
         // 返回按钮
         btnBack.setOnClickListener {
             finish()
+        }
+
+        // 显示当前 Group 地址
+        if (device.groupAddress != null) {
+            etGroupAddress.setText("0x${device.groupAddress!!.toString(16).uppercase()}")
+        }
+
+        // 保存 Group 地址按钮
+        btnSaveGroupAddress.setOnClickListener {
+            val input = etGroupAddress.text.toString().trim()
+
+            if (input.isEmpty()) {
+                // 清空 Group 地址，使用 Unicast 地址
+                device.groupAddress = null
+                deviceRepository.updateDevice(device)
+                Toast.makeText(this, "已清空 Group 地址，将使用 Unicast 地址 0x${device.address.toString(16).uppercase()}", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            try {
+                val address = if (input.startsWith("0x", ignoreCase = true)) {
+                    input.substring(2).toInt(16)
+                } else {
+                    input.toInt()
+                }
+
+                device.groupAddress = address
+                deviceRepository.updateDevice(device)
+                Toast.makeText(this, "Group 地址已保存: 0x${address.toString(16).uppercase()}", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "地址格式错误", Toast.LENGTH_SHORT).show()
+            }
         }
         
         // 设置 Spinner 数据
@@ -262,13 +305,14 @@ class DeviceDetailActivity : ComponentActivity() {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 tvBrightnessValue.text = "$progress%"
                 if (fromUser) {
-                    // 实时发送控制指令
-                    viewModel.sendBrightness(device.address, progress)
+                    // 实时发送控制指令，使用 Group 地址（如果有）
+                    val targetAddress = device.groupAddress ?: device.address
+                    viewModel.sendBrightness(targetAddress, progress)
                 }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            
+
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 // 滑动结束时保存亮度值
                 seekBar?.progress?.let { progress ->
@@ -277,7 +321,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 }
             }
         })
-        
+
         // 亮度减少按钮（每次 -1%）
         btnBrightnessDown.setOnClickListener {
             val currentProgress = seekBarBrightness.progress
@@ -285,12 +329,13 @@ class DeviceDetailActivity : ComponentActivity() {
                 val newProgress = currentProgress - 1
                 seekBarBrightness.progress = newProgress
                 tvBrightnessValue.text = "$newProgress%"
-                viewModel.sendBrightness(device.address, newProgress)
+                val targetAddress = device.groupAddress ?: device.address
+                viewModel.sendBrightness(targetAddress, newProgress)
                 saveBrightness(device.address, newProgress)
                 device.brightness = newProgress
             }
         }
-        
+
         // 亮度增加按钮（每次 +1%）
         btnBrightnessUp.setOnClickListener {
             val currentProgress = seekBarBrightness.progress
@@ -298,7 +343,8 @@ class DeviceDetailActivity : ComponentActivity() {
                 val newProgress = currentProgress + 1
                 seekBarBrightness.progress = newProgress
                 tvBrightnessValue.text = "$newProgress%"
-                viewModel.sendBrightness(device.address, newProgress)
+                val targetAddress = device.groupAddress ?: device.address
+                viewModel.sendBrightness(targetAddress, newProgress)
                 saveBrightness(device.address, newProgress)
                 device.brightness = newProgress
             }
@@ -375,10 +421,15 @@ class DeviceDetailActivity : ComponentActivity() {
         viewModel.isConnected.observe(this) { connected ->
             val spinnerProxyAddress = findViewById<Spinner>(R.id.spinnerProxyAddress)
             val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
-            
+
             if (connected) {
                 tvConnectionStatus.text = "已连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+                tvSignalStrength.visibility = View.VISIBLE
+                // 延迟更新信号强度，等待 RSSI 数据准备好
+                tvSignalStrength.postDelayed({
+                    updateSignalStrength(tvSignalStrength)
+                }, 500)
                 btnConnect.text = "断开"
                 btnConnect.visibility = View.VISIBLE
                 btnAutoConnect.visibility = View.GONE
@@ -388,6 +439,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnSyncTime.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
             } else {
+                tvSignalStrength.visibility = View.GONE
                 tvConnectionStatus.text = "未连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.darker_gray))
                 btnConnect.text = "断开"
@@ -399,7 +451,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnReadTime.isEnabled = false
                 btnSyncTime.isEnabled = false
                 spinnerProxyAddress.isEnabled = true
-                
+
                 // 刷新 Spinner 列表（可能有新的历史记录）
                 isInitialSelection = true  // 重置标志，避免自动触发连接
                 setupProxySpinner(spinnerProxyAddress)
@@ -454,11 +506,33 @@ class DeviceDetailActivity : ComponentActivity() {
         if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
             setupScheduleCard()
         }
+
+        // 手动触发一次 UI 更新，处理进入页面时已经连接的情况
+        if (viewModel.isConnected.value == true) {
+            tvConnectionStatus.text = "已连接"
+            tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+            tvSignalStrength.visibility = View.VISIBLE
+            updateSignalStrength(tvSignalStrength)
+            btnConnect.text = "断开"
+            btnConnect.visibility = View.VISIBLE
+            findViewById<Button>(R.id.btnAutoConnect).visibility = View.GONE
+            findViewById<Button>(R.id.btnRefreshTemp).isEnabled = true
+            findViewById<Button>(R.id.btnRefreshLightLevel).isEnabled = true
+            findViewById<Button>(R.id.btnReadTime).isEnabled = true
+            findViewById<Button>(R.id.btnSyncTime).isEnabled = true
+            findViewById<Spinner>(R.id.spinnerProxyAddress).isEnabled = false
+        }
     }
     
     private fun observeViewModel() {
+        // 观察 RSSI 变化
+        viewModel.getCurrentRssi().observe(this) { rssi ->
+            val tvSignalStrength = findViewById<TextView>(R.id.tvSignalStrength)
+            if (viewModel.isConnected.value == true && tvSignalStrength.visibility == View.VISIBLE) {
+                updateSignalStrength(tvSignalStrength)
+            }
+        }
     }
-    
 
     private fun setupScheduleCard() {
         val cardSchedule = findViewById<androidx.cardview.widget.CardView>(R.id.cardSchedule)
@@ -517,6 +591,93 @@ class DeviceDetailActivity : ComponentActivity() {
             tvOffTime.text = "未设置"
             prefs.edit().remove("${key}_off").apply()
             cancelAlarm(false)
+        }
+
+        // Scheduler 模型读取
+        val btnReadScheduler = findViewById<Button>(R.id.btnReadScheduler)
+        val tvSchedulerStatus = findViewById<TextView>(R.id.tvSchedulerStatus)
+        val tvSchedulerDetails = findViewById<TextView>(R.id.tvSchedulerDetails)
+
+        btnReadScheduler.setOnClickListener {
+            Log.d("DeviceDetail", "读取计划按钮被点击")
+            if (viewModel.isConnected.value == true) {
+                Log.d("DeviceDetail", "设备已连接，开始读取计划")
+                viewModel.readScheduler(device.address)
+                tvSchedulerStatus.text = "读取中..."
+                tvSchedulerDetails.visibility = View.GONE
+            } else {
+                Log.w("DeviceDetail", "设备未连接，无法读取计划")
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 观察 Scheduler 状态更新
+        viewModel.schedulerUpdates.observe(this) { (address, schedules) ->
+            if (address == device.address) {
+                val setIndexes = mutableListOf<Int>()
+                for (i in 0..15) {
+                    if ((schedules and (1 shl i)) != 0) {
+                        setIndexes.add(i)
+                    }
+                }
+
+                if (setIndexes.isEmpty()) {
+                    tvSchedulerStatus.text = "无计划"
+                    tvSchedulerDetails.visibility = View.GONE
+                } else {
+                    tvSchedulerStatus.text = "读取中... (${setIndexes.size} 个计划)"
+                    tvSchedulerDetails.text = "计划索引: ${setIndexes.joinToString(", ")}"
+                    tvSchedulerDetails.visibility = View.VISIBLE
+                }
+            }
+        }
+
+        // 观察 Scheduler Action 详情更新
+        viewModel.schedulerActionUpdates.observe(this) { (address, index, action) ->
+            if (address == device.address) {
+                // 解析时间和动作
+                val hour = action.hour
+                val minute = action.minute
+                val dayOfWeek = action.dayOfWeek
+                val actionType = action.action // 0=关, 1=开, 2=场景回调
+
+                val timeStr = String.format("%02d:%02d", hour, minute)
+                val repeatStr = when {
+                    dayOfWeek == 0x7F -> "每天"
+                    dayOfWeek == 0x00 -> "单次"
+                    else -> {
+                        val days = mutableListOf<String>()
+                        if ((dayOfWeek and 0x01) != 0) days.add("一")
+                        if ((dayOfWeek and 0x02) != 0) days.add("二")
+                        if ((dayOfWeek and 0x04) != 0) days.add("三")
+                        if ((dayOfWeek and 0x08) != 0) days.add("四")
+                        if ((dayOfWeek and 0x10) != 0) days.add("五")
+                        if ((dayOfWeek and 0x20) != 0) days.add("六")
+                        if ((dayOfWeek and 0x40) != 0) days.add("日")
+                        "周${days.joinToString(",")}"
+                    }
+                }
+
+                // 根据动作类型更新对应的 UI
+                when (actionType) {
+                    1 -> { // 开灯
+                        tvOnTime.text = timeStr
+                        tvOnRepeat.text = repeatStr
+                    }
+                    0 -> { // 关灯
+                        tvOffTime.text = timeStr
+                        tvOffRepeat.text = repeatStr
+                    }
+                }
+
+                // 更新状态显示
+                val currentStatus = tvSchedulerStatus.text.toString()
+                if (currentStatus.contains("读取中")) {
+                    tvSchedulerStatus.text = "已读取计划详情"
+                }
+
+                Toast.makeText(this, "计划 #$index: $timeStr ($repeatStr) - ${if (actionType == 1) "开灯" else "关灯"}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -820,6 +981,38 @@ class DeviceDetailActivity : ComponentActivity() {
             com.example.ble_device_mesh.data.DeviceType.SWITCH -> "开关"
             com.example.ble_device_mesh.data.DeviceType.SENSOR -> "传感器"
             com.example.ble_device_mesh.data.DeviceType.OTHER -> "其他"
+        }
+    }
+
+    private fun updateSignalStrength(tvSignalStrength: TextView) {
+        val rssi = viewModel.getCurrentRssi().value ?: -999
+
+        when {
+            rssi == -999 || rssi < -100 -> {
+                // 无信号
+                tvSignalStrength.text = "📶❌"
+                tvSignalStrength.setTextColor(getColor(android.R.color.holo_red_dark))
+            }
+            rssi >= -50 -> {
+                // 信号极强
+                tvSignalStrength.text = "📶 ${rssi}dBm"
+                tvSignalStrength.setTextColor(getColor(android.R.color.holo_green_dark))
+            }
+            rssi >= -70 -> {
+                // 信号良好
+                tvSignalStrength.text = "📶 ${rssi}dBm"
+                tvSignalStrength.setTextColor(getColor(android.R.color.holo_green_light))
+            }
+            rssi >= -85 -> {
+                // 信号一般
+                tvSignalStrength.text = "📶 ${rssi}dBm"
+                tvSignalStrength.setTextColor(getColor(android.R.color.holo_orange_light))
+            }
+            else -> {
+                // 信号弱
+                tvSignalStrength.text = "📶 ${rssi}dBm"
+                tvSignalStrength.setTextColor(getColor(android.R.color.holo_red_light))
+            }
         }
     }
 }

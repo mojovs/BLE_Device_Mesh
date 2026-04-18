@@ -160,14 +160,31 @@
                             android:textSize="14sp"
                             android:backgroundTint="#FF9800"/>
 
-                        <TextView
-                            android:id="@+id/tvConnectionStatus"
+                        <LinearLayout
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
-                            android:text="未连接"
-                            android:textSize="11sp"
-                            android:textColor="#999999"/>
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/tvConnectionStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="未连接"
+                                android:textSize="11sp"
+                                android:textColor="#999999"/>
+
+                            <TextView
+                                android:id="@+id/tvSignalStrength"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:text="📶"
+                                android:textSize="14sp"
+                                android:visibility="gone"/>
+
+                        </LinearLayout>
 
                     </LinearLayout>
                 </LinearLayout>
@@ -231,6 +248,47 @@
                             android:textColor="#666666"
                             android:lineSpacingExtra="3dp"
                             android:layout_marginBottom="8dp"/>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="控制地址 (Group)："
+                            android:textSize="11sp"
+                            android:textColor="#666666"
+                            android:layout_marginBottom="6dp"/>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="12dp">
+
+                            <EditText
+                                android:id="@+id/etGroupAddress"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:hint="例如: 0x0200"
+                                android:textSize="12sp"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:background="@drawable/spinner_background"
+                                android:inputType="text"
+                                android:layout_marginEnd="8dp"/>
+
+                            <Button
+                                android:id="@+id/btnSaveGroupAddress"
+                                android:layout_width="wrap_content"
+                                android:layout_height="32dp"
+                                android:text="保存"
+                                android:textSize="12sp"
+                                android:minWidth="0dp"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:backgroundTint="#4CAF50"/>
+
+                        </LinearLayout>
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -760,6 +818,63 @@
                                 android:paddingEnd="12dp"
                                 android:backgroundTint="#9E9E9E"/>
                         </LinearLayout>
+
+                        <!-- 分隔线 -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="#E0E0E0"
+                            android:layout_marginTop="16dp"
+                            android:layout_marginBottom="16dp"/>
+
+                        <!-- Scheduler 模型读取 -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="设备计划状态"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:textColor="#333333"
+                            android:layout_marginBottom="8dp"/>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="8dp">
+
+                            <Button
+                                android:id="@+id/btnReadScheduler"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:text="读取计划"
+                                android:textSize="13sp"
+                                android:paddingStart="16dp"
+                                android:paddingEnd="16dp"
+                                android:backgroundTint="#9C27B0"/>
+
+                            <TextView
+                                android:id="@+id/tvSchedulerStatus"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="未读取"
+                                android:textSize="13sp"
+                                android:textColor="#666666"
+                                android:layout_marginStart="12dp"/>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvSchedulerDetails"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textSize="12sp"
+                            android:textColor="#666666"
+                            android:visibility="gone"
+                            android:background="#F5F5F5"
+                            android:padding="8dp"/>
 
                     </LinearLayout>
                 </LinearLayout>

@@ -3,16 +3,18 @@ package com.example.ble_device_mesh
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Button
+import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
-class SettingsActivity : ComponentActivity() {
+class SettingsActivity : AppCompatActivity() {
     private val viewModel: MeshViewModel by viewModels()
     
     private val filePickerLauncher = registerForActivityResult(
@@ -61,6 +63,30 @@ class SettingsActivity : ComponentActivity() {
             Toast.makeText(this, "扫描 Proxy 节点", Toast.LENGTH_SHORT).show()
         }
         
+        // 修改Provisioner地址
+        tvConfigStatus.setOnClickListener {
+            val currentAddr = viewModel.currentProvisionerAddress.value ?: 0
+            val input = EditText(this)
+            input.hint = "输入新地址(十六进制，如 200)"
+            AlertDialog.Builder(this)
+                .setTitle("修改Provisioner地址")
+                .setMessage("当前地址: 0x${currentAddr.toString(16)}\n(基于设备ID自动生成)\n\n可手动修改，但建议保持自动分配")
+                .setView(input)
+                .setPositiveButton("确定") { _, _ ->
+                    try {
+                        val newAddr = input.text.toString().toInt(16)
+                        viewModel.setProvisionerAddress(newAddr)
+                        // 保存手动设置的地址
+                        getSharedPreferences("mesh_config", MODE_PRIVATE)
+                            .edit().putInt("provisioner_address", newAddr).apply()
+                        Toast.makeText(this, "地址已设置为: 0x${newAddr.toString(16)}", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "地址格式错误", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
 
         
         // 观察网络状态
@@ -72,6 +98,10 @@ class SettingsActivity : ComponentActivity() {
         
         viewModel.isConnected.observe(this) { connected ->
             tvProxyStatus.text = if (connected) "已连接" else "未连接"
+        }
+        
+        viewModel.currentProvisionerAddress.observe(this) { addr ->
+            tvConfigStatus.text = "Provisioner地址: 0x${addr?.toString(16)} (点击修改)"
         }
     }
     

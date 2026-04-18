@@ -121,6 +121,7 @@ class MeshDeviceAdapter(
         val tvDeviceAddress: TextView = view.findViewById(R.id.tvDeviceAddress)
         val tvBrightness: TextView = view.findViewById(R.id.tvBrightness)
         val tvTemperature: TextView = view.findViewById(R.id.tvTemperature)
+        val tvLightLevel: TextView = view.findViewById(R.id.tvLightLevel)
         val tvLightStatus: TextView = view.findViewById(R.id.tvLightStatus)
         val tvScheduleStatus: TextView = view.findViewById(R.id.tvScheduleStatus)
         val btnDelete: TextView = view.findViewById(R.id.btnDeleteDevice)
@@ -152,6 +153,9 @@ class MeshDeviceAdapter(
 
         holder.tvTemperature.visibility = if (device.temperature != null) View.VISIBLE else View.GONE
         device.temperature?.let { holder.tvTemperature.text = "${String.format("%.1f", it)}°C" }
+
+        holder.tvLightLevel.visibility = if (device.lightLevel != null) View.VISIBLE else View.GONE
+        device.lightLevel?.let { holder.tvLightLevel.text = "${String.format("%.1f", it)} lux" }
 
         if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
             holder.tvLightStatus.visibility = View.VISIBLE

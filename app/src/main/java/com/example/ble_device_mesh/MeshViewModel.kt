@@ -37,16 +37,30 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
         val lightLevelUpdates = MutableLiveData<Pair<Int, Float>>()
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
+        val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
+        val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
         val scannedDevices = MutableLiveData<List<ScanResult>>(emptyList())
         val isScanning = MutableLiveData<Boolean>(false)
         val connectedDeviceAddress = MutableLiveData<String?>(null)
         val currentProvisionerAddress = MutableLiveData<Int>()
+        val currentRssi = MutableLiveData<Int>(-999)
+        
+        // 超时处理
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var schedulerGetTimeoutRunnable: Runnable? = null
+        
+        // 配网相关
+        val unprovisionedDevices = MutableLiveData<List<UnprovisionedMeshNode>>(emptyList())
+        val isProvisioning = MutableLiveData<Boolean>(false)
+        val provisioningStatus = MutableLiveData<String>("")
+        val provisioningComplete = MutableLiveData<Pair<Boolean, Int>>()
         
         var meshNetWork: MeshNetwork? = null
         var currentTid = 0
         var connectionRetryCount = 0
         val maxRetries = 3
         var currentDevice: ScanResult? = null
+        var currentUnprovisionedNode: UnprovisionedMeshNode? = null
     }
 
     // 暴露给 View 的属性 (代理到 MeshState)
@@ -56,10 +70,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     val temperatureUpdates get() = MeshState.temperatureUpdates
     val lightLevelUpdates get() = MeshState.lightLevelUpdates
     val timeUpdates get() = MeshState.timeUpdates
+    val schedulerUpdates get() = MeshState.schedulerUpdates
+    val schedulerActionUpdates get() = MeshState.schedulerActionUpdates
     val scannedDevices get() = MeshState.scannedDevices
     val isScanning get() = MeshState.isScanning
     val connectedDeviceAddress get() = MeshState.connectedDeviceAddress
     val currentProvisionerAddress get() = MeshState.currentProvisionerAddress
+    
+    // 配网相关
+    val unprovisionedDevices get() = MeshState.unprovisionedDevices
+    val isProvisioning get() = MeshState.isProvisioning
+    val provisioningStatus get() = MeshState.provisioningStatus
+    val provisioningComplete get() = MeshState.provisioningComplete
     
     var meshNetWork: MeshNetwork?
         get() = MeshState.meshNetWork
@@ -97,7 +119,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 设置 MeshStatusCallbacks
         meshManagerApi.setMeshStatusCallbacks(object : MeshStatusCallbacks {
             override fun onTransactionFailed(dst: Int, hasIncompleteTimerExpired: Boolean) {
-                Log.e("MeshApp", "事务失败: dst=$dst")
+                Log.e("MeshApp", "事务失败: dst=0x${dst.toString(16)}, timeout=$hasIncompleteTimerExpired")
+                MeshState.statusText.postValue("设备 0x${dst.toString(16)} 响应超时")
             }
 
             override fun onUnknownPduReceived(src: Int, accessPayload: ByteArray?) {
@@ -107,6 +130,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onBlockAcknowledgementProcessed(dst: Int, source: ControlMessage) {}
             override fun onBlockAcknowledgementReceived(src: Int, wrapper: ControlMessage) {}
             override fun onMeshMessageProcessed(dst: Int, meshMessage: MeshMessage) {}
+            
+            override fun onHeartbeatMessageReceived(src: Int, heartbeatMessage: ControlMessage) {
+                Log.d("MeshApp", "收到心跳消息: src=0x${src.toString(16)}")
+            }
 
             override fun onMessageDecryptionFailed(meshLayer: String?, errorMessage: String?) {
                 Log.e("MeshApp", "消息解密失败: layer=$meshLayer, error=$errorMessage")
@@ -120,8 +147,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         parseSensorStatus(src, data)
                     }
                 } else if (meshMessage is TimeStatus) {
+                    val data = meshMessage.parameters
                     Log.d("MeshApp", "收到 TimeStatus (Src: 0x${src.toString(16)})")
+                    if (data != null && data.isNotEmpty()) {
+                        Log.d("MeshApp", "TimeStatus 原始数据: ${data.joinToString(" ") { "%02X".format(it) }}")
+                    }
                     parseTimeStatus(src, meshMessage)
+                } else if (meshMessage.opCode == 0x824A) {
+                    Log.d("MeshApp", "收到 SchedulerStatus (Src: 0x${src.toString(16)})")
+                    parseSchedulerStatus(src, meshMessage)
+                } else if (meshMessage.opCode == 0x5F) {
+                    Log.d("MeshApp", "收到 SchedulerActionStatus (Src: 0x${src.toString(16)})")
+                    parseSchedulerActionStatus(src, meshMessage)
                 }
             }
         })
@@ -132,78 +169,20 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onNetworkLoaded(network: MeshNetwork?) {
                 Log.d("MeshApp", "onNetworkLoaded 被调用, network = $network")
                 MeshState.meshNetWork = network
-                
+
                 if (network == null) {
                     statusText.postValue("没有发现网络，请导入 nRF Mesh 配置")
                 } else {
-                    // === 自动修复逻辑：检查当前 Provisioner 地址是否有效 ===
-                    // 之前的随机地址尝试可能导致地址指向不存在的 Node，引发 Crash
+                    // === 自动设置设备唯一地址 ===
                     try {
-                        val provisioner = network.selectedProvisioner
-                        val currentAddr = provisioner.provisionerAddress ?: 0
-                        
-                        // 尝试查找当前地址对应的 Node
-                        var nodeExists = false
-                        try {
-                            // 使用反射调用 getProvisionedNode(int address)
-                            val method = network.javaClass.getMethod("getProvisionedNode", Int::class.javaPrimitiveType)
-                            val node = method.invoke(network, currentAddr)
-                            nodeExists = (node != null)
-                        } catch (e: Exception) {
-                            Log.w("MeshApp", "无法验证节点存在性: $e")
-                            // 如果方法不存在，可能是旧版本库，暂时假设存在以避免误判
-                            nodeExists = true 
-                        }
-                        
-                        if (!nodeExists) {
-                            Log.e("MeshApp", "当前地址 0x${currentAddr.toString(16)} 无效！正在尝试寻找可用地址...")
-                            statusText.postValue("检测到配置异常，正在修复...")
-                            
-                            // 暴力尝试修复：寻找 0x0001, 0x0002 等常见地址
-                            val candidates = listOf(0x0001, 0x0002, 0x0056, 0x0099, 0x1234)
-                            var validAddr: Int? = null
-                            
-                            val getMethod = network.javaClass.getMethod("getProvisionedNode", Int::class.javaPrimitiveType)
-                            
-                            for (addr in candidates) {
-                                val n = getMethod.invoke(network, addr)
-                                if (n != null) {
-                                    validAddr = addr
-                                    break
-                                }
-                            }
-                            
-                            if (validAddr != null) {
-                                Log.w("MeshApp", "修复至地址: 0x${validAddr.toString(16)}")
-                                
-                                // 设置回有效地址
-                                val setAddrMethod = try {
-                                    provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Integer::class.java)
-                                } catch (e: Exception) {
-                                    provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Int::class.javaPrimitiveType)
-                                }
-                                setAddrMethod.isAccessible = true
-                                setAddrMethod.invoke(provisioner, validAddr)
-                                statusText.postValue("已自动修复配置 (ID: 0x${validAddr.toString(16)})")
-                                
-                                // === 修复后重建网络映射 ===
-                                Log.w("MeshApp", "修复后重建网络映射...")
-                                val json = MeshState.meshManagerApi.exportMeshNetwork()
-                                if (json != null) {
-                                    MeshState.meshManagerApi.importMeshNetworkJson(json)
-                                    return // 退出当前流程，由 onNetworkImported 完成加载
-                                }
-                            } else {
-                                Log.e("MeshApp", "无法找到任何有效节点！")
-                                statusText.postValue("配置严重损坏：请重新导入")
-                            }
-                        }
+                        val deviceAddress = getOrGenerateDeviceAddress(getApplication())
+                        setProvisionerAddressInternal(network, deviceAddress)
+                        Log.d("MeshApp", "已设置设备地址: 0x${deviceAddress.toString(16)}")
                     } catch (e: Exception) {
-                        Log.e("MeshApp", "修复检查出错: $e")
+                        Log.e("MeshApp", "设置设备地址失败: $e")
                     }
 
                     MeshState.meshNetWork = network
-                    MeshState.currentProvisionerAddress.postValue(network.selectedProvisioner.provisionerAddress)
                     isNetworkLoaded.postValue(true)
                     statusText.postValue("Mesh 网络已就绪: ${network.meshName}")
                     Log.d("MeshApp", "网络加载成功: ${network.meshName}")
@@ -223,12 +202,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onNetworkImported(meshNetwork: MeshNetwork?) {
                 Log.d("MeshApp", "onNetworkImported 被调用")
                 MeshState.meshNetWork = meshNetwork
-                
-                val selectedAddr = meshNetwork?.selectedProvisioner?.provisionerAddress ?: 0
-                MeshState.currentProvisionerAddress.postValue(selectedAddr)
-                
+
+                if (meshNetwork != null) {
+                    // === 使用配置文件中的原始 Provisioner 地址 ===
+                    val originalAddr = meshNetwork.selectedProvisioner?.provisionerAddress ?: 0
+                    MeshState.currentProvisionerAddress.postValue(originalAddr)
+                    statusText.postValue("网络已导入 (Provisioner地址: 0x${originalAddr.toString(16)})")
+                    Log.d("MeshApp", "使用配置文件中的 Provisioner 地址: 0x${originalAddr.toString(16)}")
+                } else {
+                    statusText.postValue("网络导入失败")
+                }
+
                 isNetworkLoaded.postValue(true)
-                statusText.postValue("Mesh 网络已加载 (ID: 0x${selectedAddr.toString(16)})")
             }
 
             override fun onNetworkImportFailed(error: String?) {
@@ -265,24 +250,96 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         })
     }
     
+    // 解析 Scheduler Status
+    private fun parseSchedulerStatus(src: Int, message: MeshMessage) {
+        try {
+            // 取消超时
+            MeshState.schedulerGetTimeoutRunnable?.let { MeshState.mainHandler.removeCallbacks(it) }
+            
+            val schedules = SchedulerMessageHelper.parseSchedulerStatus(message) ?: return
+            Log.d("MeshApp", "解析到 Scheduler 状态: 0x${schedules.toString(16)} (Src: 0x${src.toString(16)})")
+
+            // 显示哪些索引已设置
+            val setIndexes = mutableListOf<Int>()
+            for (i in 0..15) {
+                if ((schedules and (1 shl i)) != 0) {
+                    setIndexes.add(i)
+                }
+            }
+            Log.d("MeshApp", "已设置的调度索引: ${setIndexes.joinToString(", ")}")
+
+            MeshState.schedulerUpdates.postValue(Pair(src, schedules))
+            MeshState.statusText.postValue("已收到设备 0x${src.toString(16)} 的调度状态")
+
+            // 自动读取每个已设置的计划详情
+            if (setIndexes.isNotEmpty()) {
+                Log.d("MeshApp", "开始读取 ${setIndexes.size} 个计划的详细信息")
+                setIndexes.forEachIndexed { idx, scheduleIndex ->
+                    // 延迟发送，避免消息冲突
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        readSchedulerAction(src, scheduleIndex)
+                    }, (idx * 500).toLong())
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MeshApp", "解析 SchedulerStatus 失败: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    // 解析 Scheduler Action Status
+    private fun parseSchedulerActionStatus(src: Int, message: MeshMessage) {
+        try {
+            val action = SchedulerMessageHelper.parseSchedulerActionStatus(message) ?: return
+
+            Log.d("MeshApp", "解析到 Scheduler Action (Src: 0x${src.toString(16)}):")
+            Log.d("MeshApp", "  - Index: ${action.index}")
+            Log.d("MeshApp", "  - Year: ${action.year}")
+            Log.d("MeshApp", "  - Month: ${action.month}")
+            Log.d("MeshApp", "  - Day: ${action.day}")
+            Log.d("MeshApp", "  - Hour: ${action.hour}")
+            Log.d("MeshApp", "  - Minute: ${action.minute}")
+            Log.d("MeshApp", "  - Second: ${action.second}")
+            Log.d("MeshApp", "  - DayOfWeek: ${action.dayOfWeek}")
+            Log.d("MeshApp", "  - Action: ${action.action}")
+            Log.d("MeshApp", "  - TransitionTime: ${action.transitionTime}")
+            Log.d("MeshApp", "  - SceneNumber: ${action.sceneNumber}")
+
+            MeshState.schedulerActionUpdates.postValue(Triple(src, action.index, action))
+            MeshState.statusText.postValue("已收到设备 0x${src.toString(16)} 的调度动作 #${action.index}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "解析 SchedulerActionStatus 失败: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
     // 解析时间状态
     private fun parseTimeStatus(src: Int, timeStatus: TimeStatus) {
         try {
+            Log.d("MeshApp", "收到 TimeStatus 原始数据:")
+            Log.d("MeshApp", "  - taiSeconds: ${timeStatus.taiSeconds}")
+            Log.d("MeshApp", "  - subSecond: ${timeStatus.subSecond}")
+            Log.d("MeshApp", "  - uncertainty: ${timeStatus.uncertainty}")
+
             // TimeStatus 包含 TAI 秒数
             val taiSeconds = timeStatus.taiSeconds
-            
+
             if (taiSeconds == null) {
                 Log.w("MeshApp", "TimeStatus 中 taiSeconds 为空")
                 return
             }
-            
+
             // TAI 转 Unix 时间戳（减去 37 秒偏移）
             val unixTime = taiSeconds.toLong() - 37L
-            
+
             Log.d("MeshApp", "解析到设备时间: TAI=$taiSeconds, Unix=$unixTime (Src: 0x${src.toString(16)})")
             MeshState.timeUpdates.postValue(Pair(src, unixTime))
+
+            // 更新状态，表示成功收到回复
+            MeshState.statusText.postValue("已收到设备 0x${src.toString(16)} 的时间")
         } catch (e: Exception) {
             Log.e("MeshApp", "解析 TimeStatus 失败: ${e.message}")
+            e.printStackTrace()
         }
     }
     
@@ -297,31 +354,31 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 
                 // 检测 CH592 固件自定义格式
                 // 固件逻辑: byte0 = (1 << 1) | ((propId >> 10) & 1)
-                // 假如 PropID = 0x004F (温度), 1000001001111
+                // PropID = 0x0071 (温度), 0000001110001
                 // propId >> 10 = 0
                 // byte0 = 2 | 0 = 2
                 if ((byte0 and 0xFE) == 0x02 && offset + 3 < data.size) {
                     val byte1 = data[offset + 1].toInt()
                     val byte2 = data[offset + 2].toInt()
-                    
+
                     val propIdMsb = (byte0 and 0x01)
                     val propIdMid = (byte1 and 0xFF)
                     val propIdLsb = (byte2 shr 6) and 0x03
-                    
+
                     val customPropId = (propIdMsb shl 10) or (propIdMid shl 2) or propIdLsb
-                    
+
                     Log.d("MeshApp", "Custom PropID Check: 0x${customPropId.toString(16)}")
-                    
-                    if (customPropId == 0x004F) {
+
+                    if (customPropId == 0x004D || customPropId == 0x004F || customPropId == 0x0071) {
                         val byte3 = data[offset + 3].toInt()
                         val valHigh = (byte2 and 0x3F)
                         val valLow = (byte3 shr 6) and 0x03
                         val rawValue = (valHigh shl 2) or valLow
                         val tempVal = rawValue.toByte() * 0.5f
-                        
-                        Log.d("MeshApp", "解析到温度 (自定义): $tempVal (Src: 0x${src.toString(16)})")
+
+                        Log.d("MeshApp", "解析到温度 (自定义 PropID=0x${customPropId.toString(16)}): $tempVal (Src: 0x${src.toString(16)})")
                         MeshState.temperatureUpdates.postValue(Pair(src, tempVal))
-                        
+
                         offset += 4
                         continue
                     }
@@ -344,48 +401,66 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     valueOffset = offset + 2
                     offset += 2 + length
                 } else {
-                    // Format B
+                    // Format B: bit7=1, bit6-0=length code
                     if (offset + 2 >= data.size) break
-                    val lenCode = byte0 and 0x7F
-                    length = if (lenCode == 0x7F) 1 else lenCode + 1
+                    val lenCode = byte0 and 0x7F  // 取低7位作为 length code
+                    length = if (lenCode == 0x7F) 0 else lenCode + 1
+                    // Property ID 小端序：Byte1=低字节, Byte2=高字节
                     propertyId = ((data[offset + 2].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
                     valueOffset = offset + 3
                     offset += 3 + length
                 }
                 
                 Log.d("MeshApp", "Standard PropID: 0x${propertyId.toString(16)}, Length: $length")
-                
-                // 温度属性 0x004F / 0x2809 / 0x0071 (Present Indoor Ambient Temperature)
-                if (propertyId == 0x004F || propertyId == 0x2809 || propertyId == 0x0071) {
+
+                // 温度属性：
+                // 0x004D = Present Ambient Temperature (标准环境温度)
+                // 0x004F = Present Outdoor Ambient Temperature (室外温度)
+                // 0x0071 = Present Indoor Ambient Temperature (室内温度 - CH592 固件)
+                if (propertyId == 0x004D || propertyId == 0x004F || propertyId == 0x0071) {
                     if (valueOffset + length <= data.size) {
                        var tempVal = 0.0f
                        if (length == 1) {
+                           // 1字节：有符号整数，0.5°C 精度
                            val raw = data[valueOffset].toByte()
                            tempVal = raw * 0.5f
+                           Log.d("MeshApp", "温度解析 (1字节): raw=$raw, temp=$tempVal")
                        } else if (length == 2) {
-                           val raw = ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or (data[valueOffset].toInt() and 0xFF)
-                           tempVal = raw.toShort() * 0.01f
+                           // 2字节：小端序，有符号整数
+                           val byte0 = data[valueOffset].toInt() and 0xFF
+                           val byte1 = data[valueOffset + 1].toInt() and 0xFF
+                           val raw = ((byte1 shl 8) or byte0).toShort()  // 转为有符号 short
+
+                           // 根据 Mesh Model Spec，温度单位是 0.01°C
+                           // 例如：25.00°C -> 设备发送 2500 (0x09C4)
+                           tempVal = raw / 100.0f
+                           Log.d("MeshApp", "温度解析 (2字节): byte0=0x${byte0.toString(16)}, byte1=0x${byte1.toString(16)}, raw=$raw, temp=$tempVal")
                        }
-                       Log.d("MeshApp", "解析到温度: $tempVal (Src: 0x${src.toString(16)})")
+                       Log.d("MeshApp", "解析到温度 (PropID=0x${propertyId.toString(16)}): $tempVal°C (Src: 0x${src.toString(16)})")
                        MeshState.temperatureUpdates.postValue(Pair(src, tempVal))
+                    }
+                } else {
+                    // 打印未识别的属性，帮助调试
+                    Log.d("MeshApp", "未识别的 Property ID: 0x${propertyId.toString(16)}, 数据长度: $length")
+                    if (valueOffset + length <= data.size) {
+                        val rawData = data.slice(valueOffset until valueOffset + length).joinToString(" ") { "%02X".format(it) }
+                        Log.d("MeshApp", "原始数据: $rawData")
                     }
                 }
 
                 // 光照度属性 0x004E (Present Ambient Light Level)
-                // 固件直接存储原始ADC值（0-255），3字节uint24格式
+                // 固件直接存储原始ADC值，3字节uint24格式（小端序）
                 if (propertyId == 0x004E) {
                     if (valueOffset + length <= data.size && length >= 3) {
                         // 读取3字节小端序数据
                         val raw = (data[valueOffset].toInt() and 0xFF) or
                                   ((data[valueOffset + 1].toInt() and 0xFF) shl 8) or
                                   ((data[valueOffset + 2].toInt() and 0xFF) shl 16)
-                        
-                        // 固件存储的是原始ADC值，这里进行简单映射到lux
-                        // 假设：ADC 0-255 映射到 0-10000 lux
-                        val lux = raw * 10000.0f / 255.0f
-                        
-                        Log.d("MeshApp", "解析到光照度: raw=$raw, lux=$lux (Src: 0x${src.toString(16)})")
-                        MeshState.lightLevelUpdates.postValue(Pair(src, lux))
+
+                        // 固件存储的是原始ADC值（0-4095，12位ADC）
+                        // 直接显示原始值，让用户看到实际的光敏电阻读数
+                        Log.d("MeshApp", "解析到光照度: raw=$raw (Src: 0x${src.toString(16)})")
+                        MeshState.lightLevelUpdates.postValue(Pair(src, raw.toFloat()))
                     }
                 }
             } catch (e: Exception) {
@@ -471,20 +546,23 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             Log.e("MeshApp", "Mesh 网络未初始化")
             return
         }
-        
+
         val appKey = network.appKeys.firstOrNull() ?: run {
              Log.e("MeshApp", "未找到 App Key")
              return
         }
-        
+
         Log.d("MeshApp", "读取传感器数据: address=0x${address.toString(16)}")
-        // SensorGet(appKey, null) 表示读取所有传感器（温度+光照）
-        val message = SensorGet(appKey, null)
-        
+
+        // 请求所有传感器（不指定 Property ID）
+        // 固件会返回所有传感器数据：温度 (0x0071) 和光照 (0x004E)
         try {
+            Log.d("MeshApp", "请求所有传感器数据")
+            // 传入 null 表示请求所有传感器
+            val message = SensorGet(appKey, null)
             MeshState.meshManagerApi.createMeshPdu(address, message)
         } catch (e: Exception) {
-             Log.e("MeshApp", "创建传感器读取 PDU 失败: ${e.message}")
+             Log.e("MeshApp", "请求传感器失败: ${e.message}")
              MeshState.statusText.postValue("读取传感器失败: ${e.message}")
         }
     }
@@ -499,23 +577,113 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             Log.e("MeshApp", "Mesh 网络未初始化")
             return
         }
-        
+
         val appKey = network.appKeys.firstOrNull() ?: run {
             Log.e("MeshApp", "未找到 App Key")
             return
         }
-        
-        Log.d("MeshApp", "读取设备时间: address=0x${address.toString(16)}")
+
+        Log.d("MeshApp", "发送 TimeGet 到地址: 0x${address.toString(16)}, AppKey Index: ${appKey.keyIndex}")
         val message = TimeGet(appKey)
-        
+
         try {
             MeshState.meshManagerApi.createMeshPdu(address, message)
+            MeshState.statusText.postValue("正在读取设备时间...")
+
+            // 设置 5 秒超时
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                // 检查是否收到了回复（通过检查状态文本）
+                if (MeshState.statusText.value?.contains("正在读取设备时间") == true) {
+                    MeshState.statusText.postValue("设备 0x${address.toString(16)} 响应超时 - 固件可能未实现 Time Server")
+                    Log.w("MeshApp", "TimeGet 超时，固件可能：1) 未绑定 AppKey 2) 发送缓冲区满 3) 未实现回复逻辑")
+                }
+            }, 5000)
         } catch (e: Exception) {
             Log.e("MeshApp", "创建时间读取 PDU 失败: ${e.message}")
             MeshState.statusText.postValue("读取时间失败: ${e.message}")
         }
     }
     
+    // 读取 Scheduler 寄存器状态
+    fun readScheduler(address: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        Log.d("MeshApp", "发送 SchedulerGet 到地址: 0x${address.toString(16)}")
+
+        // 尝试创建真正的 SchedulerGet 消息
+        val message = SchedulerMessageHelper.createSchedulerGet(appKey)
+        if (message != null) {
+            try {
+                MeshState.meshManagerApi.createMeshPdu(address, message)
+                MeshState.statusText.postValue("正在读取调度状态...")
+
+                // 设置 5 秒超时
+                MeshState.schedulerGetTimeoutRunnable = Runnable {
+                    if (MeshState.statusText.value?.contains("正在读取调度状态") == true) {
+                        MeshState.statusText.postValue("设备 0x${address.toString(16)} 响应超时 - 可能不支持 Scheduler")
+                        Log.w("MeshApp", "SchedulerGet 超时，可能原因：1) 固件未实现 Scheduler Server 2) Model 未绑定 3) OpCode 不匹配")
+                    }
+                }
+                MeshState.mainHandler.postDelayed(MeshState.schedulerGetTimeoutRunnable!!, 5000)
+            } catch (e: Exception) {
+                Log.e("MeshApp", "创建 SchedulerGet PDU 失败: ${e.message}")
+                MeshState.statusText.postValue("读取调度失败: ${e.message}")
+            }
+        } else {
+            Log.e("MeshApp", "无法创建 SchedulerGet 消息")
+            MeshState.statusText.postValue("不支持 Scheduler 功能")
+        }
+    }
+
+    // 读取指定索引的 Scheduler Action
+    fun readSchedulerAction(address: Int, index: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        if (index < 0 || index > 15) {
+            Log.e("MeshApp", "无效的调度索引: $index (有效范围: 0-15)")
+            MeshState.statusText.postValue("无效的调度索引")
+            return
+        }
+
+        Log.d("MeshApp", "发送 SchedulerActionGet 到地址: 0x${address.toString(16)}, 索引: $index")
+        val message = SchedulerMessageHelper.createSchedulerActionGet(appKey, index) ?: run {
+            Log.e("MeshApp", "创建 SchedulerActionGet 消息失败")
+            return
+        }
+
+        try {
+            MeshState.meshManagerApi.createMeshPdu(address, message)
+            MeshState.statusText.postValue("正在读取调度动作 #$index...")
+
+            // 设置 5 秒超时
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (MeshState.statusText.value?.contains("正在读取调度动作") == true) {
+                    MeshState.statusText.postValue("设备 0x${address.toString(16)} 响应超时")
+                    Log.w("MeshApp", "SchedulerActionGet 超时")
+                }
+            }, 5000)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "创建 SchedulerActionGet PDU 失败: ${e.message}")
+            MeshState.statusText.postValue("读取调度动作失败: ${e.message}")
+        }
+    }
+
     // 设置设备时间（同步当前手机时间）
     fun setDeviceTime(address: Int) {
         val network = MeshState.meshNetWork ?: run {
@@ -646,6 +814,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             MeshState.connectedDeviceAddress.postValue(address)
             MeshState.statusText.postValue("已连接到 $address")
             MeshState.connectionRetryCount = 0
+            
+            // 开始定期读取 RSSI
+            startRssiUpdates()
         }
 
         override fun onDataReceived(data: ByteArray) {
@@ -653,6 +824,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
 
         override fun onMeshMessageReceived(src: Int, data: ByteArray) {}
+        
+        override fun onRssiRead(rssi: Int) {
+            MeshState.currentRssi.postValue(rssi)
+        }
 
         override fun onError(error: String) {
             if (MeshState.connectionRetryCount < MeshState.maxRetries - 1) {
@@ -668,11 +843,68 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
     
+    private var rssiUpdateHandler: android.os.Handler? = null
+    private val rssiUpdateRunnable = object : Runnable {
+        override fun run() {
+            if (MeshState.isConnected.value == true) {
+                MeshState.bleConnection.readRssi()
+                rssiUpdateHandler?.postDelayed(this, 2000) // 每2秒更新一次
+            }
+        }
+    }
+    
+    private fun startRssiUpdates() {
+        rssiUpdateHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        rssiUpdateHandler?.post(rssiUpdateRunnable)
+    }
+    
+    private fun stopRssiUpdates() {
+        rssiUpdateHandler?.removeCallbacks(rssiUpdateRunnable)
+        rssiUpdateHandler = null
+        MeshState.currentRssi.postValue(-999)
+    }
+
     fun disconnectDevice() {
+        stopRssiUpdates()
         MeshState.bleConnection.disconnect()
         MeshState.isConnected.postValue(false)
         MeshState.connectedDeviceAddress.postValue(null)
         MeshState.statusText.postValue("已断开连接")
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopRssiUpdates()
+    }
+
+    private fun setProvisionerAddressInternal(network: MeshNetwork, address: Int) {
+        // 检查地址是否已存在
+        var nodeExists = false
+        try {
+            val method = network.javaClass.getMethod("getProvisionedNode", Int::class.javaPrimitiveType)
+            val node = method.invoke(network, address)
+            nodeExists = (node != null)
+        } catch (e: Exception) {
+            Log.w("MeshApp", "无法验证节点: $e")
+        }
+
+        // 不存在则创建虚拟节点
+        if (!nodeExists) {
+            createVirtualNode(network, address)
+            Log.d("MeshApp", "已创建虚拟节点: 0x${address.toString(16)}")
+        }
+
+        // 设置 provisioner 地址
+        val provisioner = network.selectedProvisioner
+        val setMethod = try {
+            provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Integer::class.java)
+        } catch (e: Exception) {
+            provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Int::class.javaPrimitiveType)
+        }
+        setMethod.isAccessible = true
+        setMethod.invoke(provisioner, address)
+
+        MeshState.currentProvisionerAddress.postValue(address)
     }
     
 
@@ -680,7 +912,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun importMeshNetwork(jsonData: String) {
         try {
             MeshState.meshManagerApi.importMeshNetworkJson(jsonData)
-            MeshState.statusText.postValue("正在导入网络配置...")
+
+            // 等待导入完成后在 onNetworkImported 回调中自动设置地址
+            // 不在这里手动设置，避免重复操作
         } catch (e: Exception) {
             MeshState.statusText.postValue("导入异常: ${e.message}")
         }
@@ -690,6 +924,142 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         return try {
             MeshState.meshManagerApi.exportMeshNetwork()
         } catch (e: Exception) { null }
+    }
+    
+    fun setProvisionerAddress(address: Int) {
+        val network = MeshState.meshNetWork
+        if (network == null) {
+            MeshState.statusText.postValue("网络未加载")
+            return
+        }
+        
+        // 检查地址是否已存在
+        var nodeExists = false
+        try {
+            val method = network.javaClass.getMethod("getProvisionedNode", Int::class.javaPrimitiveType)
+            val node = method.invoke(network, address)
+            nodeExists = (node != null)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "验证地址失败: $e")
+        }
+        
+        // 如果节点不存在，创建虚拟节点
+        if (!nodeExists) {
+            try {
+                createVirtualNode(network, address)
+                Log.d("MeshApp", "已创建虚拟节点: 0x${address.toString(16)}")
+            } catch (e: Exception) {
+                Log.e("MeshApp", "创建虚拟节点失败: $e")
+                MeshState.statusText.postValue("地址 0x${address.toString(16)} 无效且无法创建虚拟节点")
+                return
+            }
+        }
+        
+        try {
+            val provisioner = network.selectedProvisioner
+            val setMethod = try {
+                provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Integer::class.java)
+            } catch (e: Exception) {
+                provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Int::class.javaPrimitiveType)
+            }
+            setMethod.isAccessible = true
+            setMethod.invoke(provisioner, address)
+            
+            MeshState.currentProvisionerAddress.postValue(address)
+            MeshState.statusText.postValue("地址已更新为: 0x${address.toString(16)}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "设置地址失败: $e")
+            MeshState.statusText.postValue("设置失败: ${e.message}")
+        }
+    }
+    
+    private fun createVirtualNode(network: MeshNetwork, address: Int) {
+        // 通过反射创建虚拟节点
+        val nodeClass = Class.forName("no.nordicsemi.android.mesh.transport.ProvisionedMeshNode")
+        val constructor = nodeClass.getDeclaredConstructor(
+            String::class.java,  // uuid
+            ByteArray::class.java,  // deviceKey
+            Int::class.javaPrimitiveType,  // unicastAddress
+            Int::class.javaPrimitiveType   // numberOfElements
+        )
+        constructor.isAccessible = true
+        
+        val uuid = java.util.UUID.randomUUID().toString()
+        val deviceKey = ByteArray(16) { 0xFF.toByte() }  // 虚拟 key
+        
+        val node = constructor.newInstance(uuid, deviceKey, address, 1)
+        
+        // 添加到网络
+        val addMethod = network.javaClass.getDeclaredMethod("addNode", nodeClass)
+        addMethod.isAccessible = true
+        addMethod.invoke(network, node)
+    }
+    
+    /**
+     * 根据设备唯一标识生成 Provisioner 地址
+     * 地址范围: 0x200-0x2FF (512-767)
+     * 包含冲突检测和解决机制
+     */
+    fun getOrGenerateDeviceAddress(context: android.content.Context): Int {
+        val prefs = context.getSharedPreferences("mesh_config", android.content.Context.MODE_PRIVATE)
+        
+        // 检查是否已保存地址
+        val savedAddress = prefs.getInt("provisioner_address", -1)
+        if (savedAddress != -1) {
+            Log.d("MeshApp", "使用已保存的地址: 0x${savedAddress.toString(16)}")
+            return savedAddress
+        }
+        
+        // 基于 Android ID 生成地址
+        val androidId = android.provider.Settings.Secure.getString(
+            context.contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "default"
+        
+        // 使用哈希生成初始地址
+        val hash = androidId.hashCode()
+        var address = 0x200 + (Math.abs(hash) % 256)
+        
+        // 冲突检测：检查该地址是否已被其他设备使用
+        // 通过在地址后追加随机偏移来解决冲突
+        val network = MeshState.meshNetWork
+        if (network != null) {
+            var attempts = 0
+            while (attempts < 256) {
+                try {
+                    val method = network.javaClass.getMethod("getProvisionedNode", Int::class.javaPrimitiveType)
+                    val node = method.invoke(network, address)
+                    
+                    // 如果节点存在且不是虚拟节点，说明地址被占用
+                    if (node != null) {
+                        val nodeUuid = node.javaClass.getMethod("getUuid").invoke(node) as String
+                        // 检查是否是真实节点（非虚拟节点的 UUID 不会是随机生成的）
+                        if (!nodeUuid.contains("灯") && nodeUuid.length > 10) {
+                            // 可能是虚拟节点，可以使用
+                            break
+                        }
+                        // 真实节点占用，尝试下一个地址
+                        Log.w("MeshApp", "地址 0x${address.toString(16)} 已被占用，尝试下一个")
+                        address = 0x200 + ((address - 0x200 + 1) % 256)
+                        attempts++
+                        continue
+                    }
+                } catch (e: Exception) {
+                    Log.w("MeshApp", "检测地址冲突失败: $e")
+                }
+                break
+            }
+        }
+        
+        // 保存地址和设备ID（用于追溯）
+        prefs.edit()
+            .putInt("provisioner_address", address)
+            .putString("device_id", androidId)
+            .apply()
+        
+        Log.d("MeshApp", "生成新地址: 0x${address.toString(16)} (设备ID: ${androidId.take(8)})")
+        
+        return address
     }
     
     private fun saveProxyAddress(address: String) {
@@ -757,6 +1127,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
             override fun onMeshMessageReceived(src: Int, data: ByteArray) {}
 
+            override fun onRssiRead(rssi: Int) {
+                MeshState.currentRssi.postValue(rssi)
+            }
+
             override fun onError(error: String) {
                 // 连接失败，尝试下一个地址
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -775,8 +1149,59 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         return getSavedProxyAddress() != null
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        // Override default behavior to keep connection alive across Activities
+    
+    fun startUnprovisionedScan() {
+        MeshState.bleScanner.startUnprovisionedScan { node: UnprovisionedMeshNode ->
+            val current = MeshState.unprovisionedDevices.value ?: emptyList()
+            if (current.none { n: UnprovisionedMeshNode -> n.deviceUuid == node.deviceUuid }) {
+                MeshState.unprovisionedDevices.postValue(current + node)
+            }
+        }
     }
+    
+    fun stopUnprovisionedScan() = MeshState.bleScanner.stopScan()
+    
+    fun provisionDevice(node: UnprovisionedMeshNode) {
+        MeshState.currentUnprovisionedNode = node
+        MeshState.isProvisioning.postValue(true)
+        MeshState.provisioningStatus.postValue("正在配网...")
+        try {
+            MeshState.meshManagerApi.identifyNode(node.deviceUuid)
+        } catch (e: Exception) {
+            MeshState.isProvisioning.postValue(false)
+            MeshState.provisioningComplete.postValue(Pair(false, 0))
+        }
+    }
+    
+    private fun configureNode(address: Int) {
+        val network = MeshState.meshNetWork ?: return
+        val appKey = network.appKeys.firstOrNull() ?: return
+        val netKey = network.netKeys.firstOrNull() ?: return
+        MeshState.meshManagerApi.createMeshPdu(address, no.nordicsemi.android.mesh.transport.ConfigCompositionDataGet())
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MeshState.meshManagerApi.createMeshPdu(address, no.nordicsemi.android.mesh.transport.ConfigAppKeyAdd(netKey, appKey))
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ bindModels(address) }, 1000)
+        }, 1000)
+    }
+    
+    private fun bindModels(address: Int) {
+        val network = MeshState.meshNetWork ?: return
+        val node = network.getNode(address) ?: return
+        val appKey = network.appKeys.firstOrNull() ?: return
+        node.elements?.forEach { element ->
+            element.value.meshModels?.forEach { (modelId, _) ->
+                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206).contains(modelId)) {
+                    try {
+                        MeshState.meshManagerApi.createMeshPdu(address, no.nordicsemi.android.mesh.transport.ConfigModelAppBind(element.value.elementAddress, modelId, appKey.keyIndex))
+                    } catch (e: Exception) {}
+                }
+            }
+        }
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MeshState.isProvisioning.postValue(false)
+            MeshState.provisioningComplete.postValue(Pair(true, address))
+        }, 2000)
+    }
+
+    fun getCurrentRssi(): MutableLiveData<Int> = MeshState.currentRssi
 }

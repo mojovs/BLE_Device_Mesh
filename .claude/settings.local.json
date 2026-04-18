@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(java:*)",
+      "Bash(\"D:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\java.exe\" -version 2>&1)",
+      "Bash(./gradlew build:*)",
+      "Bash(./gradlew.bat assembleDebug)",
+      "Bash(find /mnt/e/code -type d -name *CH592*)",
+      "Bash(./gradlew assembleDebug)",
+      "Bash(\"c:/Program Files/draw.io/draw.io.exe\" --export --format png --output \"MPID_Format_Diagram.png\" \"MPID_Format_Diagram.drawio\")",
+      "Bash(find . -name \"*.h\" -exec grep -l \"struct net_buf_simple\" {})",
+      "Bash(ls -la *.kt)",
+      "Bash(find app/build -name *.jar -o -name *.aar)",
+      "Bash(grep -r class.*Get.*extends app/src/main/java)",
+      "Bash(../gradlew compileDebugKotlin)",
+      "Bash(javap -cp ~/.gradle/caches/modules-2/files-2.1/no.nordicsemi.android/mesh/3.3.0/*/mesh-3.3.0.jar no.nordicsemi.android.mesh.transport.TimeGet)",
+      "Bash(xargs grep:*)",
+      "Bash(find . -path ./build -prune -o -name \"*.java\" -type f -exec grep -l \"class.*extends MeshMessage\" {})",
+      "Bash(grep -r class.*Get.*ApplicationKey --include=*.kt --include=*.java app/src/main/java/no/nordicsemi)",
+      "Bash(jar -tf ~/.gradle/caches/modules-2/files-2.1/no.nordicsemi.android/mesh/*/*/mesh-*.jar)",
+      "Bash(grep -r class.*Message ~/.gradle/caches/modules-2/files-2.1/no.nordicsemi.android/mesh/)",
+      "Bash(find ~/.gradle/caches -name *.jar -path */nordicsemi*/mesh/*)",
+      "Bash(xargs jar:*)",
+      "Bash(grep -r 'class VendorModelMessageUnacked' --include=*.java --include=*.kt)",
+      "Bash(adb devices *)",
+      "Bash(./gradlew compileDebugKotlin)",
+      "Bash(adb install *)",
+      "Bash(adb logcat *)",
+      "Bash(find . -name \"*.jar\" -exec jar -tf {} \\\\;)"
+    ]
+  }
+}

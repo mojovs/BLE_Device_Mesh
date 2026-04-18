@@ -1,0 +1,396 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "https://www.bluetooth.com/specifications/specs/mesh-cdb-1-0-1-schema.json#",
+  "version": "1.0.1",
+  "meshUUID": "7BBCA295-5F49-4C79-9231-3CB340D5DBC2",
+  "meshName": "小米9",
+  "timestamp": "2026-04-14T22:27:33+08:00",
+  "partial": false,
+  "netKeys": [
+    {
+      "name": "Network Key 1",
+      "index": 0,
+      "key": "21AC250562E2882B93C3BCCD6B9873CE",
+      "phase": 0,
+      "minSecurity": "insecure",
+      "timestamp": "2026-04-14T22:27:34+08:00"
+    }
+  ],
+  "appKeys": [
+    {
+      "name": "Application Key 1",
+      "index": 0,
+      "boundNetKey": 0,
+      "key": "E644AEE801985C7BEDF296E57353B36F"
+    }
+  ],
+  "provisioners": [
+    {
+      "provisionerName": "CH Mesh Provisioner",
+      "UUID": "00BF3BF1-C603-498A-9B5B-E0E943810438",
+      "allocatedUnicastRange": [
+        {
+          "lowAddress": "0001",
+          "highAddress": "199A"
+        }
+      ],
+      "allocatedGroupRange": [
+        {
+          "lowAddress": "C000",
+          "highAddress": "CC9A"
+        }
+      ],
+      "allocatedSceneRange": [
+        {
+          "firstScene": "0001",
+          "lastScene": "3333"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "UUID": "00BF3BF1-C603-498A-9B5B-E0E943810438",
+      "name": "CH Mesh Provisioner",
+      "deviceKey": "8F5FAB6CD90D9F0DA3D6F6E81A7CCB61",
+      "unicastAddress": "0099",
+      "security": "insecure",
+      "configComplete": false,
+      "features": {
+        "friend": 2,
+        "lowPower": 2,
+        "proxy": 2,
+        "relay": 2
+      },
+      "defaultTTL": 5,
+      "netKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "appKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "elements": [
+        {
+          "name": "Element: 0x0099",
+          "index": 0,
+          "location": "0000",
+          "models": [
+            {
+              "modelId": "0001",
+              "bind": [],
+              "subscribe": []
+            }
+          ]
+        }
+      ],
+      "excluded": false
+    },
+    {
+      "UUID": "88A765F5-17C8-0000-0000-000000000000",
+      "name": "灯3",
+      "deviceKey": "583DDA0C9EACF902100F8A088D2355BD",
+      "unicastAddress": "0013",
+      "security": "insecure",
+      "configComplete": false,
+      "cid": "07D7",
+      "pid": "0000",
+      "vid": "0000",
+      "crpl": "0014",
+      "features": {
+        "friend": 2,
+        "lowPower": 2,
+        "proxy": 0,
+        "relay": 0
+      },
+      "defaultTTL": 3,
+      "netKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "appKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "elements": [
+        {
+          "name": "Element: 0x0013",
+          "index": 0,
+          "location": "0000",
+          "models": [
+            {
+              "modelId": "0000",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "0002",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "1002",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1100",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1200",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1206",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "1207",
+              "bind": [],
+              "subscribe": []
+            }
+          ]
+        }
+      ],
+      "excluded": false
+    },
+    {
+      "UUID": "13B28AF5-17C8-0000-0000-000000000000",
+      "name": "灯1",
+      "deviceKey": "E577E2C365A3788A9875729831AF5402",
+      "unicastAddress": "0011",
+      "security": "insecure",
+      "configComplete": false,
+      "cid": "07D7",
+      "pid": "0000",
+      "vid": "0000",
+      "crpl": "0014",
+      "features": {
+        "friend": 2,
+        "lowPower": 2,
+        "proxy": 0,
+        "relay": 0
+      },
+      "defaultTTL": 3,
+      "netKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "appKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "elements": [
+        {
+          "name": "Element: 0x0011",
+          "index": 0,
+          "location": "0000",
+          "models": [
+            {
+              "modelId": "0000",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "0002",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "1002",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1100",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1200",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1206",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1207",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            }
+          ]
+        }
+      ],
+      "excluded": false
+    },
+    {
+      "UUID": "50AC8AF5-17C8-0000-0000-000000000000",
+      "name": "灯2",
+      "deviceKey": "595AEDE3B069F515364039C92E750C22",
+      "unicastAddress": "0012",
+      "security": "insecure",
+      "configComplete": false,
+      "cid": "07D7",
+      "pid": "0000",
+      "vid": "0000",
+      "crpl": "0014",
+      "features": {
+        "friend": 2,
+        "lowPower": 2,
+        "proxy": 0,
+        "relay": 0
+      },
+      "defaultTTL": 3,
+      "netKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "appKeys": [
+        {
+          "index": 0,
+          "updated": false
+        }
+      ],
+      "elements": [
+        {
+          "name": "Element: 0x0012",
+          "index": 0,
+          "location": "0000",
+          "models": [
+            {
+              "modelId": "0000",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "0002",
+              "bind": [],
+              "subscribe": []
+            },
+            {
+              "modelId": "1002",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1100",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1200",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1206",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            },
+            {
+              "modelId": "1207",
+              "bind": [
+                0
+              ],
+              "subscribe": []
+            }
+          ]
+        }
+      ],
+      "excluded": false
+    }
+  ],
+  "groups": [
+    {
+      "name": "Mesh Group",
+      "address": "C000",
+      "parentAddress": "0000"
+    }
+  ],
+  "scenes": [],
+  "networkExclusions": [
+    {
+      "ivIndex": 0,
+      "addresses": [
+        "0002",
+        "0003",
+        "0004",
+        "0005",
+        "0006",
+        "0007",
+        "0008",
+        "0009",
+        "000A",
+        "000B",
+        "000C",
+        "000D",
+        "000E",
+        "0010",
+        "000F",
+        "0011",
+        "0012",
+        "0013",
+        "0014",
+        "0015",
+        "0016",
+        "0017",
+        "0018",
+        "0019",
+        "001A",
+        "001B",
+        "001C",
+        "0001"
+      ]
+    }
+  ]
+}       "0001"
+      ]
+    }
+  ]
+}

@@ -38,6 +38,10 @@ class BleScannerManager(private val context: Context) {
         fun onScanFailed(errorCode: Int)
     }
     
+    interface UnprovisionedScanListener {
+        fun onUnprovisionedNodeFound(node: no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode)
+    }
+    
     @SuppressLint("MissingPermission")
     fun startScan(listener: ScanListener) {
         Log.d("BleScannerManager", "startScan 被调用")
@@ -151,5 +155,67 @@ class BleScannerManager(private val context: Context) {
         Log.d("BleScannerManager", "权限检查 - SCAN: $hasScan, CONNECT: $hasConnect, LOCATION: $hasLocation")
         
         return hasScan && hasConnect && hasLocation
+    }
+    
+    // 扫描未配网设备
+    @SuppressLint("MissingPermission")
+    fun startUnprovisionedScan(onNodeFound: (no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode) -> Unit) {
+        if (isScanning) {
+            stopScan()
+        }
+        
+        if (!hasPermissions()) {
+            Log.e("BleScannerManager", "缺少蓝牙权限")
+            return
+        }
+        
+        if (bluetoothLeScanner == null) {
+            Log.e("BleScannerManager", "蓝牙扫描器不可用")
+            return
+        }
+        
+        scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val serviceData = result.scanRecord?.serviceData
+                val provisioningUuid = ParcelUuid(UUID.fromString(MESH_PROVISIONING_UUID))
+                
+                serviceData?.get(provisioningUuid)?.let { data ->
+                    try {
+                        // 从Service Data中提取UUID（前16字节）
+                        if (data.size >= 16) {
+                            val uuidBytes = data.copyOfRange(0, 16)
+                            val uuid = UUID.nameUUIDFromBytes(uuidBytes)
+                            val node = no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode(uuid)
+                            onNodeFound(node)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("BleScannerManager", "解析未配网设备失败: ${e.message}")
+                    }
+                }
+            }
+            
+            override fun onScanFailed(errorCode: Int) {
+                Log.e("BleScannerManager", "扫描失败: $errorCode")
+                isScanning = false
+            }
+        }
+        
+        val filters = listOf(
+            ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(UUID.fromString(MESH_PROVISIONING_UUID)))
+                .build()
+        )
+        
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        
+        try {
+            bluetoothLeScanner.startScan(filters, settings, scanCallback)
+            isScanning = true
+            Log.d("BleScannerManager", "开始扫描未配网设备")
+        } catch (e: SecurityException) {
+            Log.e("BleScannerManager", "安全异常: ${e.message}")
+        }
     }
 }
