@@ -1,183 +1,302 @@
 package com.example.ble_device_mesh
 
 import android.util.Log
+import com.example.ble_device_mesh.data.SchedulerTask
 import no.nordicsemi.android.mesh.ApplicationKey
+import no.nordicsemi.android.mesh.data.GenericTransitionTime
+import no.nordicsemi.android.mesh.data.ScheduleEntry
 import no.nordicsemi.android.mesh.transport.MeshMessage
-import no.nordicsemi.android.mesh.transport.AccessMessage
-import no.nordicsemi.android.mesh.transport.GenericOnOffGet
-import no.nordicsemi.android.mesh.transport.VendorModelMessageUnacked
-import java.lang.reflect.Constructor
+import no.nordicsemi.android.mesh.transport.SchedulerGet
+import no.nordicsemi.android.mesh.transport.SchedulerActionGet
+import no.nordicsemi.android.mesh.transport.SchedulerActionSet
 
 /**
  * Scheduler 消息辅助类
- * 用于创建和解析 Scheduler 相关的 Mesh 消息
+ * 使用 nRF Mesh 库 3.4.0 的标准 Scheduler 模型类
+ *
+ * 标准 10 字节编码（Mesh Model Specification）：
+ * Byte 0: Index (4 bits)
+ * Byte 1-2: Year (16 bits)
+ * Byte 3-6: Month/Day/Hour/Minute/Second/DayOfWeek 位域
+ * Byte 7: Brightness (0-100) - 固件自定义，使用 TransitionTime 字段传递
+ * Byte 8: Enabled (0/1) - 固件自定义，使用 SceneNumber 低字节传递
+ * Byte 9: 保留 (0) - SceneNumber 高字节
+ *
+ * 字段映射说明：
+ * - action: TurnOn(1) / TurnOff(0) / NoAction(15)
+ * - brightness: 映射到 TransitionTime (Byte 7)
+ * - enabled: 映射到 SceneNumber 低字节 (Byte 8)
+ * - repeat(dayOfWeek): 标准 DayOfWeek 位掩码
  */
 object SchedulerMessageHelper {
 
+    private const val TAG = "SchedulerHelper"
+
     /**
      * 创建 SchedulerGet 消息
-     * 尝试使用反射创建自定义 AccessMessage
+     * OpCode: 0x8249
      */
-    fun createSchedulerGet(appKey: ApplicationKey): MeshMessage? {
-        return try {
-            // 尝试使用新版本库的 SchedulerGet（如果存在）
-            try {
-                val schedulerGetClass = Class.forName("no.nordicsemi.android.mesh.transport.SchedulerGet")
-                val constructor = schedulerGetClass.getConstructor(ApplicationKey::class.java)
-                Log.d("SchedulerHelper", "使用标准 SchedulerGet 类")
-                return constructor.newInstance(appKey) as MeshMessage
-            } catch (e: ClassNotFoundException) {
-                Log.w("SchedulerHelper", "nRF Mesh 库不支持 SchedulerGet，使用 GenericOnOffGet 代替")
-                GenericOnOffGet(appKey)
-            }
-        } catch (e: Exception) {
-            Log.e("SchedulerHelper", "创建消息失败: ${e.message}")
-            null
-        }
+    fun createSchedulerGet(appKey: ApplicationKey): MeshMessage {
+        return SchedulerGet(appKey)
     }
 
     /**
      * 创建 SchedulerActionGet 消息
+     * OpCode: 0x8248
      */
-    fun createSchedulerActionGet(appKey: ApplicationKey, index: Int): MeshMessage? {
-        return try {
-            val params = ByteArray(1).apply {
-                this[0] = (index and 0x0F).toByte()
-            }
-            createCustomAccessMessage(appKey, 0x8248, params)
-        } catch (e: Exception) {
-            Log.e("SchedulerHelper", "创建 SchedulerActionGet 消息失败: ${e.message}")
-            null
-        }
+    fun createSchedulerActionGet(appKey: ApplicationKey, index: Int): MeshMessage {
+        return SchedulerActionGet(appKey, index)
     }
 
     /**
-     * 使用反射创建自定义 AccessMessage
+     * 创建 SchedulerActionSet 消息
+     * OpCode: 0x60
+     * 使用 nRF Mesh 库的标准 ScheduleEntry 构造消息
      */
-    private fun createCustomAccessMessage(appKey: ApplicationKey, opCode: Int, parameters: ByteArray): MeshMessage? {
-        return try {
-            // 使用 GenericOnOffGet 作为模板
-            val message = GenericOnOffGet(appKey)
+    fun createSchedulerActionSet(appKey: ApplicationKey, task: SchedulerTask): MeshMessage {
+        Log.d(TAG, "创建 SchedulerActionSet: index=${task.index}, time=${task.getTimeString()}, action=${task.action}, brightness=${task.brightness}%, repeat=0x${task.repeat.toString(16)}, enabled=${task.enabled}")
 
-            Log.d("SchedulerHelper", "创建自定义消息: OpCode=0x${opCode.toString(16)}, 参数长度=${parameters.size}")
+        val entry = buildScheduleEntry(task)
+        val message = SchedulerActionSet(appKey, task.index, entry)
 
-            // 尝试通过反射修改 OpCode
-            try {
-                val opCodeField = AccessMessage::class.java.getDeclaredField("mOpCode")
-                opCodeField.isAccessible = true
-                opCodeField.set(message, opCode)
-                Log.d("SchedulerHelper", "成功设置 OpCode: 0x${opCode.toString(16)}")
-            } catch (e: Exception) {
-                Log.w("SchedulerHelper", "无法设置 mOpCode 字段: ${e.message}")
-                // 尝试其他可能的字段名
-                try {
-                    val opCodeField = AccessMessage::class.java.getDeclaredField("opCode")
-                    opCodeField.isAccessible = true
-                    opCodeField.set(message, opCode)
-                    Log.d("SchedulerHelper", "成功设置 opCode: 0x${opCode.toString(16)}")
-                } catch (e2: Exception) {
-                    Log.e("SchedulerHelper", "无法设置 opCode 字段: ${e2.message}")
-                }
-            }
+        Log.d(TAG, "SchedulerActionSet 创建成功, opcode=0x${message.opCode.toString(16)}")
+        return message
+    }
 
-            // 如果有参数，尝试修改 parameters 字段
-            if (parameters.isNotEmpty()) {
-                try {
-                    val paramsField = AccessMessage::class.java.getDeclaredField("mParameters")
-                    paramsField.isAccessible = true
-                    paramsField.set(message, parameters)
-                    Log.d("SchedulerHelper", "成功设置参数: ${parameters.joinToString("") { "%02X".format(it) }}")
-                } catch (e: Exception) {
-                    Log.w("SchedulerHelper", "无法设置 mParameters 字段: ${e.message}")
-                    // 尝试其他可能的字段名
-                    try {
-                        val paramsField = AccessMessage::class.java.getDeclaredField("parameters")
-                        paramsField.isAccessible = true
-                        paramsField.set(message, parameters)
-                        Log.d("SchedulerHelper", "成功设置 parameters: ${parameters.joinToString("") { "%02X".format(it) }}")
-                    } catch (e2: Exception) {
-                        Log.e("SchedulerHelper", "无法设置 parameters 字段: ${e2.message}")
-                    }
-                }
-            }
+    /**
+     * 将 SchedulerTask 转换为标准 ScheduleEntry
+     *
+     * 注意：ScheduleEntry 内部类的工厂方法（Hour.Value, Minute.Value, DayOfWeek.Any 等）
+     * 通过 ScheduleEntryFactory (Java) 调用，因为 Kotlin 2.0 K2 编译器无法直接访问
+     * 这些 Java 静态方法（私有基类 EntryType 导致的可见性问题）。
+     *
+     * 固件自定义字段映射：
+     * - Byte 7: Brightness (0-100) - 使用 TransitionTime 字段传递
+     * - Byte 8: Enabled (0/1) - 使用 SceneNumber 低字节传递
+     * - Byte 9: 保留 (0) - SceneNumber 高字节
+     */
+    private fun buildScheduleEntry(task: SchedulerTask): ScheduleEntry {
+        val entry = ScheduleEntry()
 
-            Log.d("SchedulerHelper", "自定义消息创建成功")
-            message
-        } catch (e: Exception) {
-            Log.e("SchedulerHelper", "创建自定义消息失败: ${e.message}")
-            e.printStackTrace()
-            null
+        // Year: Any=任意年份, Specific=指定年份
+        entry.setYear(ScheduleEntryFactory.createYear(task.year))
+
+        // Month: Any=任意月份
+        entry.setMonth(ScheduleEntryFactory.createMonthAll())
+
+        // Day: Any=任意日期
+        entry.setDay(ScheduleEntryFactory.createDayAny())
+
+        // Hour
+        entry.setHour(ScheduleEntryFactory.createHour(task.hour))
+
+        // Minute
+        entry.setMinute(ScheduleEntryFactory.createMinute(task.minute))
+
+        // Second: 固定为 0
+        entry.setSecond(ScheduleEntryFactory.createSecond(0))
+
+        // DayOfWeek: 标准 7 位位掩码 (bit0=Sun..bit6=Sat)
+        // 0x7F = Any, 0 = 单次, 其他 = 指定星期
+        entry.setDayOfWeek(ScheduleEntryFactory.createDayOfWeek(task.repeat))
+
+        // Action: 始终使用实际的 action，不管 enabled 状态
+        // enabled 状态通过 Byte 8 传递
+        val actionValue = when (task.action) {
+            SchedulerTask.Action.ON -> ScheduleEntryFactory.getActionTurnOn()
+            SchedulerTask.Action.OFF -> ScheduleEntryFactory.getActionTurnOff()
+            else -> ScheduleEntryFactory.getActionNoAction()
         }
+        entry.setAction(actionValue)
+
+        // Transition Time: 设为 Immediate (0)
+        entry.setGenericTransitionTime(
+            GenericTransitionTime(
+                GenericTransitionTime.TransitionResolution.SECOND,
+                GenericTransitionTime.TransitionStep.Immediate
+            )
+        )
+
+        // Scene Number: 用于传递亮度值（固件自定义扩展）
+        val sceneValue = task.brightness.coerceIn(0, 100)
+        entry.setScene(ScheduleEntryFactory.createScene(sceneValue))
+
+        Log.d(TAG, "ScheduleEntry 构建: action=$actionValue, scene=$sceneValue, dayOfWeek=${task.repeat}")
+        return entry
     }
 
     /**
      * 解析 SchedulerStatus 消息
+     * 返回 16 位 bitmask
      */
     fun parseSchedulerStatus(message: MeshMessage): Int? {
+        Log.d(TAG, "=== 解析 SchedulerStatus ===")
+        Log.d(TAG, "  消息类型: ${message.javaClass.simpleName}")
+        Log.d(TAG, "  消息类全名: ${message.javaClass.name}")
+        Log.d(TAG, "  OpCode: 0x${message.opCode.toString(16)}")
+
         try {
-            if (message is AccessMessage) {
-                val params = message.parameters
-                if (params.size >= 2) {
-                    return ((params[1].toInt() and 0xFF) shl 8) or (params[0].toInt() and 0xFF)
+            // 尝试使用反射调用 getSchedules() 方法
+            Log.d(TAG, "  尝试调用 getSchedules() 方法...")
+            val method = message.javaClass.getMethod("getSchedules")
+            val result = method.invoke(message) as? Int
+
+            if (result != null) {
+                Log.d(TAG, "  解析成功: bitmap = 0x${result.toString(16)}")
+
+                // 显示哪些索引已设置
+                val setIndexes = mutableListOf<Int>()
+                for (i in 0..15) {
+                    if ((result and (1 shl i)) != 0) {
+                        setIndexes.add(i)
+                    }
                 }
+                Log.d(TAG, "  已设置的索引: ${setIndexes.joinToString(", ")}")
+                Log.d(TAG, "========================")
+                return result
+            } else {
+                Log.w(TAG, "  getSchedules() 返回 null")
+            }
+        } catch (e: NoSuchMethodException) {
+            Log.e(TAG, "  未找到 getSchedules() 方法")
+            Log.e(TAG, "  可用方法列表:")
+            message.javaClass.methods.forEach { method ->
+                Log.e(TAG, "    - ${method.name}(${method.parameterTypes.joinToString { it.simpleName }}): ${method.returnType.simpleName}")
             }
         } catch (e: Exception) {
-            Log.e("SchedulerHelper", "解析 SchedulerStatus 失败: ${e.message}")
+            Log.e(TAG, "  调用 getSchedules() 失败: ${e.message}")
+            e.printStackTrace()
         }
+
+        Log.d(TAG, "========================")
         return null
     }
 
     /**
      * 解析 SchedulerActionStatus 消息
+     * 返回 SchedulerTask 对象
      */
-    fun parseSchedulerActionStatus(message: MeshMessage): SchedulerAction? {
+    fun parseSchedulerActionStatus(message: MeshMessage, srcAddress: Int = 0): SchedulerTask? {
+        Log.d(TAG, "=== 解析 SchedulerActionStatus ===")
+        Log.d(TAG, "  消息类型: ${message.javaClass.simpleName}")
+        Log.d(TAG, "  消息类全名: ${message.javaClass.name}")
+        Log.d(TAG, "  OpCode: 0x${message.opCode.toString(16)}")
+
         try {
-            if (message is AccessMessage) {
-                val params = message.parameters
-                if (params.size >= 10) {
-                    return SchedulerAction(
-                        index = params[0].toInt() and 0x0F,
-                        year = params[1].toInt() and 0x7F,
-                        month = (params[2].toInt() shr 4) and 0x0F,
-                        day = params[2].toInt() and 0x1F,
-                        hour = params[3].toInt() and 0x1F,
-                        minute = params[4].toInt() and 0x3F,
-                        second = params[5].toInt() and 0x3F,
-                        dayOfWeek = params[6].toInt() and 0x7F,
-                        action = params[7].toInt() and 0x0F,
-                        transitionTime = params[8].toInt() and 0xFF,
-                        sceneNumber = ((params[10].toInt() and 0xFF) shl 8) or (params[9].toInt() and 0xFF)
-                    )
-                }
+            // 获取 index
+            Log.d(TAG, "  尝试获取 index...")
+            val indexMethod = message.javaClass.getMethod("getIndex")
+            val index = indexMethod.invoke(message) as? Int
+            if (index == null) {
+                Log.w(TAG, "  getIndex() 返回 null")
+                return null
+            }
+            Log.d(TAG, "  index = $index")
+
+            // 获取 ScheduleEntry
+            Log.d(TAG, "  尝试获取 ScheduleEntry...")
+            val entryMethod = message.javaClass.getMethod("getEntry")
+            val entry = entryMethod.invoke(message)
+            if (entry == null) {
+                Log.w(TAG, "  getEntry() 返回 null")
+                return null
+            }
+            Log.d(TAG, "  ScheduleEntry 类型: ${entry.javaClass.simpleName}")
+
+            val task = convertScheduleEntry(entry, index, srcAddress)
+            if (task != null) {
+                Log.d(TAG, "  解析成功: ${task.getTimeString()}, action=${task.action}, brightness=${task.brightness}%")
+            } else {
+                Log.w(TAG, "  convertScheduleEntry 返回 null")
+            }
+            Log.d(TAG, "========================")
+            return task
+        } catch (e: NoSuchMethodException) {
+            Log.e(TAG, "  未找到方法: ${e.message}")
+            Log.e(TAG, "  可用方法列表:")
+            message.javaClass.methods.forEach { method ->
+                Log.e(TAG, "    - ${method.name}(${method.parameterTypes.joinToString { it.simpleName }}): ${method.returnType.simpleName}")
             }
         } catch (e: Exception) {
-            Log.e("SchedulerHelper", "解析 SchedulerActionStatus 失败: ${e.message}")
+            Log.e(TAG, "  解析失败: ${e.message}")
+            e.printStackTrace()
         }
+
+        Log.d(TAG, "========================")
         return null
     }
 
     /**
-     * 创建原始 Scheduler Get PDU 数据
-     * OpCode: 0x8249 (2 字节)
+     * 将 nRF Mesh 库的 ScheduleEntry 转换为 SchedulerTask
+     *
+     * 固件自定义字段映射：
+     * - SceneNumber: 亮度值 (0-100)
+     * - Action: NoAction = 禁用
      */
-    fun createSchedulerGetPdu(): ByteArray {
-        return byteArrayOf(0x82.toByte(), 0x49.toByte())
+    private fun convertScheduleEntry(entry: Any, index: Int, srcAddress: Int): SchedulerTask? {
+        try {
+            val clazz = entry.javaClass
+
+            // 读取各字段值
+            val year = getEnumValue(clazz.getMethod("getYear").invoke(entry))
+            val month = getEnumValue(clazz.getMethod("getMonth").invoke(entry))
+            val day = getEnumValue(clazz.getMethod("getDay").invoke(entry))
+            val hour = getEnumValue(clazz.getMethod("getHour").invoke(entry))
+            val minute = getEnumValue(clazz.getMethod("getMinute").invoke(entry))
+            val second = getEnumValue(clazz.getMethod("getSecond").invoke(entry))
+            val dayOfWeek = getEnumValue(clazz.getMethod("getDayOfWeek").invoke(entry))
+            val actionValue = getEnumValue(clazz.getMethod("getAction").invoke(entry))
+            val sceneValue = getEnumValue(clazz.getMethod("getScene").invoke(entry))
+
+            Log.d(TAG, "转换 ScheduleEntry: index=$index, hour=$hour, minute=$minute, action=$actionValue, scene=$sceneValue, dayOfWeek=$dayOfWeek")
+
+            // Action 映射: NoAction(15) = 禁用
+            val enabled = actionValue != 15
+            val taskAction = when (actionValue) {
+                1 -> SchedulerTask.Action.ON
+                0 -> SchedulerTask.Action.OFF
+                else -> SchedulerTask.Action.NO_ACTION
+            }
+
+            // 场景号映射回亮度（固件自定义扩展）
+            val brightness = if (sceneValue == 0 || sceneValue == 0xFFFF) 0 else sceneValue.coerceIn(0, 100)
+
+            return SchedulerTask(
+                index = index,
+                hour = hour,
+                minute = minute,
+                second = second,
+                action = taskAction,
+                brightness = brightness,
+                repeat = dayOfWeek,  // dayOfWeek 就是位掩码
+                enabled = enabled,
+                year = if (year == 100) 0 else year,  // 100 = Any Year
+                month = if (month == 0xFFF) 0 else month,
+                day = if (day == 0) 0 else day,
+                deviceAddress = srcAddress
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "转换 ScheduleEntry 失败: ${e.message}")
+            return null
+        }
     }
 
     /**
-     * 创建原始 Scheduler Action Get PDU 数据
-     * OpCode: 0x8248 (2 字节) + Index (1 字节)
+     * 从枚举对象提取 value
      */
-    fun createSchedulerActionGetPdu(index: Int): ByteArray {
-        return byteArrayOf(
-            0x82.toByte(), 0x48.toByte(),  // OpCode
-            (index and 0x0F).toByte()      // Index
-        )
+    private fun getEnumValue(enumObj: Any?): Int {
+        if (enumObj == null) return 0
+        return try {
+            val method = enumObj.javaClass.getMethod("getValue")
+            method.invoke(enumObj) as? Int ?: 0
+        } catch (e: Exception) {
+            0
+        }
     }
 }
 
 /**
- * Scheduler Action 数据类
+ * Scheduler Action 数据类（旧版兼容）
  */
 data class SchedulerAction(
     val index: Int,

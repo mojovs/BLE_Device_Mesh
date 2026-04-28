@@ -22,6 +22,11 @@ class ProvisionActivity : ComponentActivity() {
     private val viewModel: MeshViewModel by viewModels()
     private lateinit var adapter: UnprovisionedDeviceAdapter
 
+    // 批量配网相关
+    private var isBatchProvisioning = false
+    private var batchDeviceList = mutableListOf<no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode>()
+    private var currentBatchIndex = 0
+
     // 权限请求
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -51,6 +56,9 @@ class ProvisionActivity : ComponentActivity() {
 
     private fun setupViews() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener {
+            if (isBatchProvisioning) {
+                stopBatchProvisioning()
+            }
             finish()
         }
 
@@ -58,15 +66,27 @@ class ProvisionActivity : ComponentActivity() {
         rvDevices.layoutManager = LinearLayoutManager(this)
 
         adapter = UnprovisionedDeviceAdapter { device ->
-            viewModel.provisionDevice(device)
+            if (!isBatchProvisioning) {
+                viewModel.provisionDevice(device)
+            }
         }
         rvDevices.adapter = adapter
 
         findViewById<Button>(R.id.btnRescan).setOnClickListener {
-            if (hasAllPermissions()) {
+            if (isBatchProvisioning) {
+                stopBatchProvisioning()
+            } else if (hasAllPermissions()) {
                 startScan()
             } else {
                 checkAndRequestPermissions()
+            }
+        }
+
+        findViewById<Button>(R.id.btnBatchProvision).setOnClickListener {
+            if (isBatchProvisioning) {
+                stopBatchProvisioning()
+            } else {
+                startBatchProvisioning()
             }
         }
 
@@ -136,10 +156,26 @@ class ProvisionActivity : ComponentActivity() {
 
         viewModel.provisioningComplete.observe(this) { (success, address) ->
             if (success) {
-                Toast.makeText(this, "配网成功！地址: 0x${address.toString(16)}", Toast.LENGTH_LONG).show()
-                finish()
+                val message = "配网成功！地址: 0x${address.toString(16)}"
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+
+                // 批量配网模式：自动配网下一个设备
+                if (isBatchProvisioning) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        provisionNextDevice()
+                    }, 2000) // 等待 2 秒后配网下一个
+                } else {
+                    finish()
+                }
             } else {
                 Toast.makeText(this, "配网失败", Toast.LENGTH_SHORT).show()
+
+                // 批量配网模式：失败后继续下一个
+                if (isBatchProvisioning) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        provisionNextDevice()
+                    }, 1000)
+                }
             }
         }
     }
@@ -218,5 +254,63 @@ class ProvisionActivity : ComponentActivity() {
         }
 
         dialog.show()
+    }
+
+    // 批量配网相关函数
+    private fun startBatchProvisioning() {
+        val devices = viewModel.unprovisionedDevices.value
+        if (devices.isNullOrEmpty()) {
+            Toast.makeText(this, "没有发现未配网设备", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isBatchProvisioning = true
+        batchDeviceList.clear()
+        batchDeviceList.addAll(devices)
+        currentBatchIndex = 0
+
+        // 更新按钮状态
+        findViewById<Button>(R.id.btnBatchProvision).apply {
+            text = "停止批量配网"
+            backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFF44336.toInt()) // 红色
+        }
+        findViewById<Button>(R.id.btnRescan).isEnabled = false
+
+        Toast.makeText(this, "开始批量配网，共 ${batchDeviceList.size} 个设备", Toast.LENGTH_SHORT).show()
+        provisionNextDevice()
+    }
+
+    private fun stopBatchProvisioning() {
+        isBatchProvisioning = false
+        batchDeviceList.clear()
+        currentBatchIndex = 0
+
+        // 恢复按钮状态
+        findViewById<Button>(R.id.btnBatchProvision).apply {
+            text = "批量配网"
+            backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFFF9800.toInt()) // 橙色
+        }
+        findViewById<Button>(R.id.btnRescan).isEnabled = true
+
+        Toast.makeText(this, "已停止批量配网", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun provisionNextDevice() {
+        if (!isBatchProvisioning || currentBatchIndex >= batchDeviceList.size) {
+            // 批量配网完成
+            if (isBatchProvisioning) {
+                Toast.makeText(this, "批量配网完成！", Toast.LENGTH_LONG).show()
+                stopBatchProvisioning()
+            }
+            return
+        }
+
+        val device = batchDeviceList[currentBatchIndex]
+        val progress = "${currentBatchIndex + 1}/${batchDeviceList.size}"
+        findViewById<TextView>(R.id.tvProvisionStatus).text = "正在配网第 $progress 个设备..."
+
+        Log.d("ProvisionActivity", "批量配网进度: $progress")
+        viewModel.provisionDevice(device)
+        currentBatchIndex++
     }
 }

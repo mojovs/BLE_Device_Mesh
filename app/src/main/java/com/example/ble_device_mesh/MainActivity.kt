@@ -112,6 +112,8 @@ class MainActivity : ComponentActivity() {
         viewModel.isConnected.observe(this) { connected ->
             if (connected) {
                 tvStatus.text = "状态: 已连接到 Proxy"
+                // 启动时间同步服务
+                TimeSyncService.start(this)
             }
         }
         

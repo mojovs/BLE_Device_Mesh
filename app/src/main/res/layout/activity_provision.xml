@@ -74,12 +74,28 @@
             style="?android:attr/progressBarStyleHorizontal"
             android:indeterminate="true"/>
 
-        <Button
-            android:id="@+id/btnRescan"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="重新扫描"/>
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnRescan"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:text="重新扫描"/>
+
+            <Button
+                android:id="@+id/btnBatchProvision"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="批量配网"
+                android:backgroundTint="#FF9800"/>
+        </LinearLayout>
 
         <Button
             android:id="@+id/btnAddProvisioned"

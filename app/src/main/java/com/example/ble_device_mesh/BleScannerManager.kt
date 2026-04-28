@@ -159,7 +159,7 @@ class BleScannerManager(private val context: Context) {
     
     // 扫描未配网设备
     @SuppressLint("MissingPermission")
-    fun startUnprovisionedScan(onNodeFound: (no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode) -> Unit) {
+    fun startUnprovisionedScan(onNodeFound: (no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode, ScanResult) -> Unit) {
         if (isScanning) {
             stopScan()
         }
@@ -186,7 +186,7 @@ class BleScannerManager(private val context: Context) {
                             val uuidBytes = data.copyOfRange(0, 16)
                             val uuid = UUID.nameUUIDFromBytes(uuidBytes)
                             val node = no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode(uuid)
-                            onNodeFound(node)
+                            onNodeFound(node, result)
                         }
                     } catch (e: Exception) {
                         Log.e("BleScannerManager", "解析未配网设备失败: ${e.message}")

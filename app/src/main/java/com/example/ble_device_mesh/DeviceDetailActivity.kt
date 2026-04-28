@@ -115,6 +115,7 @@ class DeviceDetailActivity : ComponentActivity() {
         val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
         val etGroupAddress = findViewById<EditText>(R.id.etGroupAddress)
         val btnSaveGroupAddress = findViewById<Button>(R.id.btnSaveGroupAddress)
+        val btnRebindAppKey = findViewById<Button>(R.id.btnRebindAppKey)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
         val btnBrightnessDown = findViewById<Button>(R.id.btnBrightnessDown)
@@ -161,7 +162,21 @@ class DeviceDetailActivity : ComponentActivity() {
                 Toast.makeText(this, "地址格式错误", Toast.LENGTH_SHORT).show()
             }
         }
-        
+
+        // 重新绑定 AppKey 按钮
+        btnRebindAppKey.setOnClickListener {
+            // 确认对话框
+            AlertDialog.Builder(this)
+                .setTitle("重新绑定 AppKey")
+                .setMessage("此操作将重新绑定设备的 AppKey，用于解决导入 JSON 后控制失效的问题。\n\n设备地址: 0x${device.address.toString(16).uppercase()}\n\n是否继续？")
+                .setPositiveButton("确定") { _, _ ->
+                    Toast.makeText(this, "正在重新绑定 AppKey...", Toast.LENGTH_SHORT).show()
+                    viewModel.rebindAppKey(device.address)
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
         // 设置 Spinner 数据
         setupProxySpinner(spinnerProxyAddress)
         
@@ -505,6 +520,32 @@ class DeviceDetailActivity : ComponentActivity() {
         // 定时开关（仅灯光设备）
         if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
             setupScheduleCard()
+
+            // 添加定时任务管理按钮
+            val btnSchedulerManager = findViewById<Button>(R.id.btnSchedulerManager)
+            if (btnSchedulerManager != null) {
+                btnSchedulerManager.visibility = View.VISIBLE
+                btnSchedulerManager.setOnClickListener {
+                    val intent = Intent(this, SchedulerListActivity::class.java).apply {
+                        putExtra(SchedulerListActivity.EXTRA_DEVICE_ADDRESS, device.address)
+                        putExtra(SchedulerListActivity.EXTRA_DEVICE_NAME, device.name)
+                    }
+                    startActivity(intent)
+                }
+            }
+
+            // 添加路灯模式按钮
+            val btnStreetlightMode = findViewById<Button>(R.id.btnStreetlightMode)
+            if (btnStreetlightMode != null) {
+                btnStreetlightMode.visibility = View.VISIBLE
+                btnStreetlightMode.setOnClickListener {
+                    val intent = Intent(this, StreetlightModeActivity::class.java).apply {
+                        putExtra(StreetlightModeActivity.EXTRA_DEVICE_ADDRESS, device.address)
+                        putExtra(StreetlightModeActivity.EXTRA_DEVICE_NAME, device.name)
+                    }
+                    startActivity(intent)
+                }
+            }
         }
 
         // 手动触发一次 UI 更新，处理进入页面时已经连接的情况
@@ -538,60 +579,6 @@ class DeviceDetailActivity : ComponentActivity() {
         val cardSchedule = findViewById<androidx.cardview.widget.CardView>(R.id.cardSchedule)
         cardSchedule.visibility = View.VISIBLE
         setupCollapsible(R.id.headerSchedule, R.id.bodySchedule, R.id.iconSchedule, false)
-
-        val tvOnTime = findViewById<TextView>(R.id.tvOnTime)
-        val tvOffTime = findViewById<TextView>(R.id.tvOffTime)
-        val tvOnRepeat = findViewById<TextView>(R.id.tvOnRepeat)
-        val tvOffRepeat = findViewById<TextView>(R.id.tvOffRepeat)
-        val prefs = getSharedPreferences("SchedulePrefs", android.content.Context.MODE_PRIVATE)
-        val key = "device_${device.address}"
-
-        // 恢复已保存的时间和模式
-        tvOnTime.text = prefs.getString("${key}_on", null) ?: "未设置"
-        tvOffTime.text = prefs.getString("${key}_off", null) ?: "未设置"
-        tvOnRepeat.text = if (prefs.getBoolean("${key}_on_repeat", true)) "每天" else "单次"
-        tvOffRepeat.text = if (prefs.getBoolean("${key}_off_repeat", true)) "每天" else "单次"
-
-        // 点击切换模式
-        tvOnRepeat.setOnClickListener {
-            val repeat = prefs.getBoolean("${key}_on_repeat", true)
-            prefs.edit().putBoolean("${key}_on_repeat", !repeat).apply()
-            tvOnRepeat.text = if (!repeat) "每天" else "单次"
-        }
-        tvOffRepeat.setOnClickListener {
-            val repeat = prefs.getBoolean("${key}_off_repeat", true)
-            prefs.edit().putBoolean("${key}_off_repeat", !repeat).apply()
-            tvOffRepeat.text = if (!repeat) "每天" else "单次"
-        }
-
-        findViewById<android.widget.Button>(R.id.btnSetOnTime).setOnClickListener {
-            showTimePicker(true) { hour, minute ->
-                val timeStr = String.format("%02d:%02d", hour, minute)
-                tvOnTime.text = timeStr
-                prefs.edit().putString("${key}_on", timeStr).apply()
-                val repeat = prefs.getBoolean("${key}_on_repeat", true)
-                scheduleAlarm(true, hour, minute, repeat)
-            }
-        }
-        findViewById<android.widget.Button>(R.id.btnClearOnTime).setOnClickListener {
-            tvOnTime.text = "未设置"
-            prefs.edit().remove("${key}_on").apply()
-            cancelAlarm(true)
-        }
-        findViewById<android.widget.Button>(R.id.btnSetOffTime).setOnClickListener {
-            showTimePicker(false) { hour, minute ->
-                val timeStr = String.format("%02d:%02d", hour, minute)
-                tvOffTime.text = timeStr
-                prefs.edit().putString("${key}_off", timeStr).apply()
-                val repeat = prefs.getBoolean("${key}_off_repeat", true)
-                scheduleAlarm(false, hour, minute, repeat)
-            }
-        }
-        findViewById<android.widget.Button>(R.id.btnClearOffTime).setOnClickListener {
-            tvOffTime.text = "未设置"
-            prefs.edit().remove("${key}_off").apply()
-            cancelAlarm(false)
-        }
 
         // Scheduler 模型读取
         val btnReadScheduler = findViewById<Button>(R.id.btnReadScheduler)
@@ -658,18 +645,6 @@ class DeviceDetailActivity : ComponentActivity() {
                     }
                 }
 
-                // 根据动作类型更新对应的 UI
-                when (actionType) {
-                    1 -> { // 开灯
-                        tvOnTime.text = timeStr
-                        tvOnRepeat.text = repeatStr
-                    }
-                    0 -> { // 关灯
-                        tvOffTime.text = timeStr
-                        tvOffRepeat.text = repeatStr
-                    }
-                }
-
                 // 更新状态显示
                 val currentStatus = tvSchedulerStatus.text.toString()
                 if (currentStatus.contains("读取中")) {
@@ -679,51 +654,6 @@ class DeviceDetailActivity : ComponentActivity() {
                 Toast.makeText(this, "计划 #$index: $timeStr ($repeatStr) - ${if (actionType == 1) "开灯" else "关灯"}", Toast.LENGTH_SHORT).show()
             }
         }
-    }
-
-    private fun showTimePicker(isOn: Boolean, onSet: (Int, Int) -> Unit) {
-        val cal = java.util.Calendar.getInstance()
-        android.app.TimePickerDialog(this, { _, hour, minute ->
-            onSet(hour, minute)
-            val label = if (isOn) "开机" else "关机"
-            Toast.makeText(this, "定时${label}已设置: ${String.format("%02d:%02d", hour, minute)}", Toast.LENGTH_SHORT).show()
-        }, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE), true).show()
-    }
-
-    private fun scheduleAlarm(turnOn: Boolean, hour: Int, minute: Int, repeat: Boolean) {
-        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
-        val intent = android.content.Intent(this, ScheduleReceiver::class.java).apply {
-            putExtra("device_address", device.address)
-            putExtra("turn_on", turnOn)
-            putExtra("brightness", device.brightness)
-        }
-        val requestCode = if (turnOn) device.address * 2 else device.address * 2 + 1
-        val pendingIntent = android.app.PendingIntent.getBroadcast(
-            this, requestCode, intent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-        val cal = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.HOUR_OF_DAY, hour)
-            set(java.util.Calendar.MINUTE, minute)
-            set(java.util.Calendar.SECOND, 0)
-            if (timeInMillis <= System.currentTimeMillis()) add(java.util.Calendar.DAY_OF_YEAR, 1)
-        }
-        if (repeat) {
-            alarmManager.setRepeating(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, android.app.AlarmManager.INTERVAL_DAY, pendingIntent)
-        } else {
-            alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, pendingIntent)
-        }
-    }
-
-    private fun cancelAlarm(turnOn: Boolean) {
-        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
-        val intent = android.content.Intent(this, ScheduleReceiver::class.java)
-        val requestCode = if (turnOn) device.address * 2 else device.address * 2 + 1
-        val pendingIntent = android.app.PendingIntent.getBroadcast(
-            this, requestCode, intent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-        alarmManager.cancel(pendingIntent)
     }
 
         private fun setupProxySpinner(spinner: Spinner) {

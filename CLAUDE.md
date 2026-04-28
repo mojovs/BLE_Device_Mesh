@@ -11,6 +11,7 @@
 - **协议**: BLE Mesh
 - **构建工具**: Gradle (Kotlin DSL)
 - **nRF Mesh 库版本**: 3.4.0 (no.nordicsemi.android:mesh)
+- **nRF Mesh 库源码路径**: E:\code\android\Android-nRF-Mesh-Library-main
 - **固件项目路径**: 
   - Windows: E:\code\c\risc-v\BLE_Light_CH592\ 或 /mnt/e/code/c/risc-v/BLE_Light_CH592/ (WSL)
   - Linux: ~/code/riscv/BLE_Light_CH592/
@@ -143,17 +144,71 @@
 - 更新 UI 并添加定时功能
 - 支持自定义选择设备 MAC 地址
 
+## BLE Mesh 协议规范
+
+### OpCode 字节序规则
+- **固件端 (MESH_LIB.h)**: 使用大端序定义 OpCode
+  - 宏定义: `#define BLE_MESH_MODEL_OP_2(b0, b1) (((b0) << 8) | (b1))`
+  - 示例: `BLE_MESH_MODEL_OP_2(0x82, 0x49)` = `0x8249`
+  - **重要**: 不要修改 MESH_LIB.h 中的 OpCode 定义，这是固件库的标准定义
+
+- **Android 端 (nRF Mesh 库)**: 使用小端序传输 OpCode
+  - 传输格式: 低字节在前，高字节在后
+  - 示例: OpCode `0x8249` 在网络上传输为 `0x49 0x82`
+  - 日志显示: Android 日志中的 OpCode 通常显示为十六进制（可能无 0x 前缀）
+
+- **OpCode 匹配机制**:
+  - 固件端的 `bt_mesh_model_op` 结构体中的 opcode 字段是 uint32_t 类型
+  - Mesh 协议栈会自动处理字节序转换，将接收到的小端序 OpCode 转换为大端序进行匹配
+  - 因此固件端和 Android 端的 OpCode 定义看起来不同，但实际上是匹配的
+
+### Scheduler Model OpCode 定义
+- **SCHEDULER_GET**: 
+  - 固件端定义: `BLE_MESH_MODEL_OP_2(0x82, 0x49)` = `0x8249`
+  - 网络传输: `0x49 0x82` (小端序)
+  - Android 日志显示: `8249` (十六进制，无 0x 前缀)
+
+- **SCHEDULER_ACTION_GET**:
+  - 固件端定义: `BLE_MESH_MODEL_OP_2(0x82, 0x48)` = `0x8248`
+  - 网络传输: `0x48 0x82` (小端序)
+
+- **SCHEDULER_ACTION_SET**:
+  - 固件端定义: `BLE_MESH_MODEL_OP_1(0x60)` = `0x60`
+  - 网络传输: `0x60` (单字节)
+
 ## 注意事项
 1. 修改代码前先阅读相关文档
 2. BLE Mesh 相关操作需要理解协议规范
 3. 传感器数据格式参考 Sensor_Model_数据格式分析.md
 4. 遇到问题先查看对应的诊断文档
+5. **禁止修改固件端的 MESH_LIB.h 文件**，这是固件库的核心定义
+6. **固件端 Flash 操作规则**：
+   - **禁止在 Mesh 消息回调中直接写入 Flash**，Flash 写入会禁用中断，与 BLE 协议栈冲突导致死机
+   - **禁止在 Mesh 消息回调中执行长时间阻塞操作**，会导致 BLE 连接超时或看门狗复位
+   - **正确做法**：使用 TMOS 延迟任务（`tmos_start_task`）异步执行 Flash 写入操作
+   - **示例**：在 `sched_action_set` 中调用 `App_TriggerSchedulerSave()` 触发延迟保存，而不是直接调用 `save_scheduler_to_flash()`
 
 ## 调试建议
 1. 使用 Android Studio 的 Logcat 查看日志
 2. BLE 相关问题可以使用 nRF Connect 等工具辅助调试
 3. Mesh 网络问题参考 FIRMWARE_DEBUG_GUIDE.md
 4. 温度传感器问题使用 diagnose_temperature.sh 快速诊断
+
+## 已知平台问题
+
+### MIUI (Xiaomi/Redmi) BLE 写入 Bug
+- **症状**: `BluetoothGatt.writeCharacteristic()` 返回 `true`，但 `onCharacteristicWrite` **不会回调**，数据也**不会实际发送**到 BLE 设备
+- **根因**: Xiaomi 蓝牙协议栈的 `mDeviceBusy` 标志卡死，导致写入请求被静默丢弃
+- **影响范围**: MIUI 系统的小米/红米手机（测试机 MI 9 Android 11 确认存在）
+- **AOSP 修复**: Xiaomi 已提交修复 commit `67158cb9`，合入 Android 13+，部分 MIUI 14 版本已修复
+- **受影响场景**: 
+  - 配网（Provisioning）PDU 写入使用 `WRITE_TYPE_DEFAULT` 时
+  - BLE 连接/服务发现后立即写入时
+- **解决/绕过方案**:
+  1. **在 BLE 写入前加延迟** — 服务发现后延迟 300ms 再调用 `identifyNode()`，每次 PDU 写入前延迟 200ms（`Handler.postDelayed`）
+  2. **直接调用 `handleWriteCallbacks`** — 不依赖 `onCharacteristicWrite` 回调来推进状态机，在 `sendData()` 成功后立即调用 `MeshManagerApi.handleWriteCallbacks(mtu, pdu)`
+  3. **使用 `WRITE_TYPE_NO_RESPONSE`** — 绕过需要 ATT 响应的写入路径（但会丢失传输层可靠性确认）
+- **诊断方法**: 观察 logcat 中 `"配网 PDU 已发送"` 出现但设备端从未收到数据（串口无输出），且 `onCharacteristicWrite` 无对应日志
 
 ## 路径转换规则
 - WSL 路径格式: `/mnt/[盘号]` 对应 Windows 路径格式: `[盘符]:`
