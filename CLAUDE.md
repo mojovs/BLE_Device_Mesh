@@ -80,6 +80,14 @@
 3. 完成后使用 Draw.io 导出为 PNG 格式
 4. 导出的 PNG 图片保存在 `drawio/images/` 目录
 
+### Draw.io 导出命令
+```bash
+"D:/Program Files/draw.io/draw.io.exe" --export --format png --scale 3 --border 20 -o "输出文件.png" "源文件.drawio"
+```
+- `--scale 3` — 3 倍缩放导出，保证高清（默认 1x 会模糊）
+- `--border 20` — 四周留 20px 边距
+- `-o` — 输出文件路径
+
 ## 开发环境
 - **平台**: Windows 10 IoT Enterprise LTSC 2021 / Linux
 - **IDE**: Android Studio (推荐)
@@ -187,12 +195,22 @@
    - **禁止在 Mesh 消息回调中执行长时间阻塞操作**，会导致 BLE 连接超时或看门狗复位
    - **正确做法**：使用 TMOS 延迟任务（`tmos_start_task`）异步执行 Flash 写入操作
    - **示例**：在 `sched_action_set` 中调用 `App_TriggerSchedulerSave()` 触发延迟保存，而不是直接调用 `save_scheduler_to_flash()`
+7. **配网后模型绑定问题**：
+   - 自研配网功能使用 nRF Mesh 库导入的 NetKey/AppKey，配网后设备可能无法立即控制
+   - **原因**：配置流程（ConfigAppKeyAdd → ConfigModelAppBind）使用超时机制"超时跳过"，绑定命令可能未实际到达设备
+   - **症状**：TimeSet 能成功（Time Server 绑上了）但 GenericLevelSet 无效
+   - **解决方法**：设备详情页点击「重新绑定模型」按钮，会重新发送 ConfigAppKeyAdd 和 ConfigModelAppBind
+   - **相关模型**：0x1002 (Generic Level Server)、0x1100 (Sensor Server)、0x1200 (Time Server)、0x1206/0x1207 (Scheduler Server/Setup)
 
 ## 调试建议
 1. 使用 Android Studio 的 Logcat 查看日志
-2. BLE 相关问题可以使用 nRF Connect 等工具辅助调试
-3. Mesh 网络问题参考 FIRMWARE_DEBUG_GUIDE.md
-4. 温度传感器问题使用 diagnose_temperature.sh 快速诊断
+2. 使用以下命令过滤 Mesh 应用日志（不带时间戳）:
+   ```bash
+   adb logcat -v raw -s MeshApp
+   ```
+3. BLE 相关问题可以使用 nRF Connect 等工具辅助调试
+4. Mesh 网络问题参考 FIRMWARE_DEBUG_GUIDE.md
+5. 温度传感器问题使用 diagnose_temperature.sh 快速诊断
 
 ## 已知平台问题
 
@@ -204,10 +222,10 @@
 - **受影响场景**: 
   - 配网（Provisioning）PDU 写入使用 `WRITE_TYPE_DEFAULT` 时
   - BLE 连接/服务发现后立即写入时
-- **解决/绕过方案**:
-  1. **在 BLE 写入前加延迟** — 服务发现后延迟 300ms 再调用 `identifyNode()`，每次 PDU 写入前延迟 200ms（`Handler.postDelayed`）
+- **解决/绕过方案**（三个方案必须同时使用，缺一不可）:
+  1. **在 BLE 写入前加延迟** — 服务发现后延迟 300ms 再调用 `identifyNode()`，每次 PDU 写入前动态计算延迟确保相邻写入间隔 ≥300ms（`Handler.postDelayed`）
   2. **直接调用 `handleWriteCallbacks`** — 不依赖 `onCharacteristicWrite` 回调来推进状态机，在 `sendData()` 成功后立即调用 `MeshManagerApi.handleWriteCallbacks(mtu, pdu)`
-  3. **使用 `WRITE_TYPE_NO_RESPONSE`** — 绕过需要 ATT 响应的写入路径（但会丢失传输层可靠性确认）
+  3. **使用 `WRITE_TYPE_NO_RESPONSE`** — 绕过需要 ATT 响应的写入路径。配网 PDU 必须用 `forceReliable = false`，否则 MIUI 协议栈的 `mDeviceBusy` 卡死会导致公钥等配网 PDU 被静默丢弃，配网卡在 "发送公钥..." 状态
 - **诊断方法**: 观察 logcat 中 `"配网 PDU 已发送"` 出现但设备端从未收到数据（串口无输出），且 `onCharacteristicWrite` 无对应日志
 
 ## 路径转换规则

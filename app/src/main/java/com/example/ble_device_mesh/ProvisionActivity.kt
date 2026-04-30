@@ -67,7 +67,7 @@ class ProvisionActivity : ComponentActivity() {
 
         adapter = UnprovisionedDeviceAdapter { device ->
             if (!isBatchProvisioning) {
-                viewModel.provisionDevice(device)
+                showProvisionConfigDialog(device)
             }
         }
         rvDevices.adapter = adapter
@@ -154,7 +154,8 @@ class ProvisionActivity : ComponentActivity() {
                 if (isProvisioning) View.VISIBLE else View.GONE
         }
 
-        viewModel.provisioningComplete.observe(this) { (success, address) ->
+        viewModel.provisioningComplete.observe(this) { event ->
+            val (success, address) = event.getContentIfNotHandled() ?: return@observe
             if (success) {
                 val message = "配网成功！地址: 0x${address.toString(16)}"
                 Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -251,6 +252,91 @@ class ProvisionActivity : ComponentActivity() {
 
             Toast.makeText(this, "设备添加成功", Toast.LENGTH_SHORT).show()
             finish()
+        }
+
+        dialog.show()
+    }
+
+    /**
+     * 显示配网配置对话框，让用户设置名称、地址和 AppKey
+     */
+    private fun showProvisionConfigDialog(device: no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_provision_config, null)
+        val etDeviceName = dialogView.findViewById<android.widget.EditText>(R.id.etDeviceName)
+        val etDeviceAddress = dialogView.findViewById<android.widget.EditText>(R.id.etDeviceAddress)
+        val spinnerAppKey = dialogView.findViewById<android.widget.Spinner>(R.id.spinnerAppKey)
+
+        // 默认名称
+        etDeviceName.setText("CH592 设备")
+
+        // 默认地址：下一个可用地址
+        val nextAddr = viewModel.getNextAvailableAddress()
+        etDeviceAddress.setText("0x${nextAddr.toString(16).padStart(4, '0')}")
+
+        // 设置 AppKey 选择器
+        val appKeyNames = viewModel.getAppKeyNames()
+        if (appKeyNames.isNotEmpty()) {
+            val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, appKeyNames)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerAppKey.adapter = adapter
+        } else {
+            // 没有 AppKey，只显示一个默认选项
+            val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, arrayOf("默认 AppKey"))
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerAppKey.adapter = adapter
+        }
+
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("配网配置")
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        dialogView.findViewById<Button>(R.id.btnCancel).setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialogView.findViewById<Button>(R.id.btnConfirm).setOnClickListener {
+            val name = etDeviceName.text.toString().trim()
+            val addressStr = etDeviceAddress.text.toString().trim()
+
+            if (name.isEmpty()) {
+                android.widget.Toast.makeText(this, "请输入设备名称", android.widget.Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            if (addressStr.isEmpty()) {
+                android.widget.Toast.makeText(this, "请输入 Mesh 地址", android.widget.Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // 解析地址
+            val address = try {
+                if (addressStr.startsWith("0x", ignoreCase = true)) {
+                    addressStr.substring(2).toInt(16)
+                } else {
+                    addressStr.toInt(16)
+                }
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(this, "地址格式错误（例如：0x0005）", android.widget.Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // 验证地址范围
+            if (address < 0x0001 || address > 0x7FFF) {
+                android.widget.Toast.makeText(this, "地址必须在 0x0001~0x7FFF 范围内", android.widget.Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            val config = MeshViewModel.ProvisionConfig(
+                deviceName = name,
+                unicastAddress = address,
+                appKeyIndex = spinnerAppKey.selectedItemPosition
+            )
+
+            Log.d("ProvisionActivity", "配网配置: name=$name, address=0x${address.toString(16)}, appKey=${spinnerAppKey.selectedItemPosition}")
+            dialog.dismiss()
+            viewModel.provisionDevice(device, config)
         }
 
         dialog.show()

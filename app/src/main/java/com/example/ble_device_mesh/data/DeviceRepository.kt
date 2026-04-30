@@ -54,6 +54,13 @@ class DeviceRepository(context: Context) {
         devices.removeAll { it.id == deviceId }
         saveDevices(devices)
     }
+
+    // 根据单播地址删除设备
+    fun deleteDeviceByAddress(address: Int) {
+        val devices = getAllDevices().toMutableList()
+        devices.removeAll { it.address == address }
+        saveDevices(devices)
+    }
     
     // 根据 ID 获取设备
     fun getDeviceById(deviceId: String): MeshDevice? {

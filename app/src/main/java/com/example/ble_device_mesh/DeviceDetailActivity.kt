@@ -13,11 +13,15 @@ import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -33,6 +37,12 @@ class DeviceDetailActivity : ComponentActivity() {
     private lateinit var scanAdapter: DeviceAdapter
     private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
     private var isInitialSelection = true  // 标记是否是初始化时的选择
+
+    // 亮度拖动节流
+    private val brightnessHandler = Handler(Looper.getMainLooper())
+    private var lastBrightnessSendTime = 0L
+    private val brightnessThrottleMs = 120L  // 最小发送间隔 120ms
+    private var pendingBrightness = -1  // 暂存的亮度值，用于延迟发送
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
@@ -115,7 +125,6 @@ class DeviceDetailActivity : ComponentActivity() {
         val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
         val etGroupAddress = findViewById<EditText>(R.id.etGroupAddress)
         val btnSaveGroupAddress = findViewById<Button>(R.id.btnSaveGroupAddress)
-        val btnRebindAppKey = findViewById<Button>(R.id.btnRebindAppKey)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
         val btnBrightnessDown = findViewById<Button>(R.id.btnBrightnessDown)
@@ -163,18 +172,73 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
-        // 重新绑定 AppKey 按钮
-        btnRebindAppKey.setOnClickListener {
-            // 确认对话框
-            AlertDialog.Builder(this)
-                .setTitle("重新绑定 AppKey")
-                .setMessage("此操作将重新绑定设备的 AppKey，用于解决导入 JSON 后控制失效的问题。\n\n设备地址: 0x${device.address.toString(16).uppercase()}\n\n是否继续？")
-                .setPositiveButton("确定") { _, _ ->
-                    Toast.makeText(this, "正在重新绑定 AppKey...", Toast.LENGTH_SHORT).show()
-                    viewModel.rebindAppKey(device.address)
+        // 清除配网信息按钮（长按 3 秒触发）
+        val layoutNodeReset = findViewById<android.widget.FrameLayout>(R.id.layoutNodeReset)
+        val btnNodeReset = findViewById<TextView>(R.id.btnNodeReset)
+        val progressNodeReset = findViewById<ProgressBar>(R.id.progressNodeReset)
+        var isHoldingForReset = false
+        val resetHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var resetAnimator: android.animation.ObjectAnimator? = null
+
+        val resetRunnable = Runnable {
+            if (isHoldingForReset) {
+                isHoldingForReset = false
+                progressNodeReset.visibility = View.GONE
+                progressNodeReset.progress = 0
+                btnNodeReset.text = "长按清除配网信息"
+                btnNodeReset.alpha = 1f
+
+                AlertDialog.Builder(this)
+                    .setTitle("确认清除配网信息")
+                    .setMessage("确定要清除设备 ${device.name} 的配网信息吗？\n\n清除后设备将恢复为未配网状态，需要重新配网才能使用。")
+                    .setPositiveButton("确定") { _, _ ->
+                        viewModel.resetNode(device.address)
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            deviceRepository.deleteDeviceByAddress(device.address)
+                            Toast.makeText(this, "设备已移除，可重新配网", Toast.LENGTH_SHORT).show()
+                            finish()
+                        }, 3000)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
+
+        btnNodeReset.setOnTouchListener { _, event ->
+            when (event.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    isHoldingForReset = true
+                    progressNodeReset.visibility = View.VISIBLE
+                    progressNodeReset.progress = 0
+                    btnNodeReset.text = "请保持按住..."
+                    btnNodeReset.alpha = 0.6f
+                    resetAnimator?.cancel()
+                    resetAnimator = android.animation.ObjectAnimator.ofInt(progressNodeReset, "progress", 0, 100)
+                    resetAnimator?.duration = 3000
+                    resetAnimator?.addListener(object : android.animation.AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: android.animation.Animator) {
+                            if (isHoldingForReset) {
+                                resetHandler.post(resetRunnable)
+                            }
+                        }
+                    })
+                    resetAnimator?.start()
+                    true
                 }
-                .setNegativeButton("取消", null)
-                .show()
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (isHoldingForReset) {
+                        isHoldingForReset = false
+                        resetAnimator?.cancel()
+                        progressNodeReset.visibility = View.GONE
+                        progressNodeReset.progress = 0
+                        btnNodeReset.text = "长按清除配网信息"
+                        btnNodeReset.alpha = 1f
+                    }
+                    true
+                }
+                else -> false
+            }
         }
 
         // 设置 Spinner 数据
@@ -320,17 +384,42 @@ class DeviceDetailActivity : ComponentActivity() {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 tvBrightnessValue.text = "$progress%"
                 if (fromUser) {
-                    // 实时发送控制指令，使用 Group 地址（如果有）
-                    val targetAddress = device.groupAddress ?: device.address
-                    viewModel.sendBrightness(targetAddress, progress)
+                    val now = System.currentTimeMillis()
+                    if (now - lastBrightnessSendTime >= brightnessThrottleMs) {
+                        // 距上次发送已超过节流间隔，立即发送
+                        val targetAddress = device.groupAddress ?: device.address
+                        viewModel.sendBrightness(targetAddress, progress)
+                        lastBrightnessSendTime = now
+                        pendingBrightness = -1
+                    } else {
+                        // 节流期间暂存最新值，延迟发送
+                        pendingBrightness = progress
+                        brightnessHandler.removeCallbacksAndMessages(null)
+                        brightnessHandler.postDelayed({
+                            if (pendingBrightness >= 0) {
+                                val targetAddress = device.groupAddress ?: device.address
+                                viewModel.sendBrightness(targetAddress, pendingBrightness)
+                                lastBrightnessSendTime = System.currentTimeMillis()
+                                pendingBrightness = -1
+                            }
+                        }, brightnessThrottleMs)
+                    }
                 }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                // 滑动结束时保存亮度值
+                // 清除延迟任务，确保最后一次值被发送
+                brightnessHandler.removeCallbacksAndMessages(null)
                 seekBar?.progress?.let { progress ->
+                    // 如果还有暂存值或进度有变化，发送最终值
+                    val sendProgress = if (pendingBrightness >= 0) pendingBrightness else progress
+                    val targetAddress = device.groupAddress ?: device.address
+                    viewModel.sendBrightness(targetAddress, sendProgress)
+                    lastBrightnessSendTime = System.currentTimeMillis()
+                    pendingBrightness = -1
+
                     saveBrightness(device.address, progress)
                     device.brightness = progress
                 }
@@ -400,6 +489,7 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvDeviceTime = findViewById<TextView>(R.id.tvDeviceTime)
         val btnReadTime = findViewById<Button>(R.id.btnReadTime)
         val btnSyncTime = findViewById<Button>(R.id.btnSyncTime)
+        val btnRebindAppKey = findViewById<Button>(R.id.btnRebindAppKey)
         
         // 显示设备时间
         if (device.deviceTime != null) {
@@ -422,6 +512,15 @@ class DeviceDetailActivity : ComponentActivity() {
             if (viewModel.isConnected.value == true) {
                 viewModel.setDeviceTime(device.address)
                 Toast.makeText(this, "正在同步时间到设备...", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnRebindAppKey.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.rebindAppKey(device.address)
+                Toast.makeText(this, "正在重新绑定模型...", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }
@@ -452,6 +551,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnRefreshLightLevel.isEnabled = true
                 btnReadTime.isEnabled = true
                 btnSyncTime.isEnabled = true
+                btnRebindAppKey.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
             } else {
                 tvSignalStrength.visibility = View.GONE
@@ -465,6 +565,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnRefreshLightLevel.isEnabled = false
                 btnReadTime.isEnabled = false
                 btnSyncTime.isEnabled = false
+                btnRebindAppKey.isEnabled = false
                 spinnerProxyAddress.isEnabled = true
 
                 // 刷新 Spinner 列表（可能有新的历史记录）
@@ -561,6 +662,7 @@ class DeviceDetailActivity : ComponentActivity() {
             findViewById<Button>(R.id.btnRefreshLightLevel).isEnabled = true
             findViewById<Button>(R.id.btnReadTime).isEnabled = true
             findViewById<Button>(R.id.btnSyncTime).isEnabled = true
+            findViewById<Button>(R.id.btnRebindAppKey).isEnabled = true
             findViewById<Spinner>(R.id.spinnerProxyAddress).isEnabled = false
         }
     }

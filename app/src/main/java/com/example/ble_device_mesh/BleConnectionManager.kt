@@ -396,8 +396,39 @@ class BleConnectionManager(private val context: Context) {
     fun readRssi() {
         bluetoothGatt?.readRemoteRssi()
     }
-    
+
     fun isConnected(): Boolean {
         return bluetoothGatt != null && proxyDataInCharacteristic != null
+    }
+
+    /**
+     * 设置新的连接监听器（替换当前的）
+     * 用于配网完成后切换到配置监听器
+     */
+    fun setListener(newListener: ConnectionListener) {
+        this.listener = newListener
+    }
+
+    /**
+     * 在不断开连接的情况下重新发现服务
+     * 用于配网后刷新 GATT 服务列表以发现新增的 Proxy Service
+     */
+    fun rediscoverServices(): Boolean {
+        return bluetoothGatt?.discoverServices() ?: false
+    }
+
+    /**
+     * 检查当前是否已连接到 Proxy Service (0x1828) 的 Data In 特征
+     * 如果返回 false，说明当前使用的是 Provisioning Service 或未连接
+     */
+    fun isUsingProxyService(): Boolean {
+        return proxyDataInCharacteristic?.uuid == MESH_PROXY_DATA_IN_UUID
+    }
+
+    /**
+     * 获取当前使用的 Data In 特征值 UUID（用于诊断）
+     */
+    fun getCurrentCharacteristicUuid(): String? {
+        return proxyDataInCharacteristic?.uuid?.toString()
     }
 }
