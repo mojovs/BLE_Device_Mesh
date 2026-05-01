@@ -940,8 +940,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 return
             }
 
-            // TAI 转 Unix 时间戳（减去 37 秒偏移）
-            val unixTime = taiSeconds.toLong() - 37L
+            // TAI 转 Unix 时间戳
+            // TAI 纪元:   2000-01-01 00:00:00 TAI
+            // Unix 纪元:  1970-01-01 00:00:00 UTC
+            // 差值 = 946684800 秒 - 37 秒 (TAI-UTC偏移)
+            val unixTime = taiSeconds.toLong() + 946684800L - 37L
 
             Log.d("MeshApp", "解析到设备时间: TAI=$taiSeconds, Unix=$unixTime (Src: 0x${src.toString(16)})")
             MeshState.timeUpdates.postValue(Pair(src, unixTime))
@@ -1416,8 +1419,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 获取当前 Unix 时间戳（秒）
         val currentTime = System.currentTimeMillis() / 1000
         
-        // TAI 时间 = Unix 时间 + 37秒（TAI-UTC差值）
-        val taiSeconds = (currentTime + 37).toInt()
+        // TAI 时间 = (Unix时间戳 - Unix到Mesh纪元偏移 + TAI-UTC差值)
+        // Mesh TAI 纪元: 2000-01-01 00:00:00 UTC, Unix 纪元: 1970-01-01 00:00:00 UTC
+        val unixToMeshEpoch = 946684800L
+        val taiSeconds = (currentTime - unixToMeshEpoch + 37).toInt()
         
         Log.d("MeshApp", "设置设备时间: address=0x${address.toString(16)}, Unix=$currentTime, TAI=$taiSeconds")
         
@@ -2100,7 +2105,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         node.elements?.forEach { element ->
             element.value.meshModels?.forEach { (modelId, _) ->
                 hasElements = true
-                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206).contains(modelId)) {
+                if (listOf(0x1002, 0x1100, 0x1200, 0x1206, 0x1207).contains(modelId)) {
                     MeshState.configBindQueue.add(Pair(element.value.elementAddress, modelId))
                 }
             }
@@ -2116,7 +2121,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             // 直接绑定常用模型到主元素地址
             val primaryAddr = address
             Log.w("MeshApp", "节点元素列表为空，使用 fallback 绑定常用模型到 0x${primaryAddr.toString(16)}")
-            val fallbackModels = listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206)
+            val fallbackModels = listOf(0x1002, 0x1100, 0x1200, 0x1206, 0x1207)
             fallbackModels.forEach { modelId ->
                 MeshState.configBindQueue.add(Pair(primaryAddr, modelId))
             }
