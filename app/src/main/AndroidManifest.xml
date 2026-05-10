@@ -77,6 +77,11 @@
             android:exported="false"
             android:theme="@style/Theme.BLE_Device_Mesh"/>
 
+        <activity
+            android:name=".GroupManagementActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BLE_Device_Mesh"/>
+
         <service
             android:name=".TimeSyncService"
             android:exported="false"

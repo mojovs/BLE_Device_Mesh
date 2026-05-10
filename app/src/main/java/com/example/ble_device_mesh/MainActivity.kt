@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
         }
         
         findViewById<LinearLayout>(R.id.navProfile).setOnClickListener {
-            Toast.makeText(this, "我的页面开发中", Toast.LENGTH_SHORT).show()
+            startActivity(Intent(this, GroupManagementActivity::class.java))
         }
         
         // 观察状态

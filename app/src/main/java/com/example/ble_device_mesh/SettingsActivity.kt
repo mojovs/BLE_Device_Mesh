@@ -112,27 +112,27 @@ class SettingsActivity : AppCompatActivity() {
             val jsonData = reader.readText()
             reader.close()
             inputStream.close()
-            
-            viewModel.importMeshNetwork(jsonData)
+
+            viewModel.importMeshNetworkWithDevices(jsonData)
             Toast.makeText(this, "正在导入配置...", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(this, "读取文件失败: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-    
+
     private fun exportMeshConfig(uri: Uri) {
-        val json = viewModel.exportMeshNetwork()
+        val json = viewModel.exportMeshNetworkWithDevices()
         if (json == null) {
             Toast.makeText(this, "导出失败：网络未加载或为空", Toast.LENGTH_LONG).show()
             return
         }
-        
+
         try {
             contentResolver.openOutputStream(uri)?.use { outputStream ->
                 outputStream.write(json.toByteArray())
             }
-            Toast.makeText(this, "导出成功", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "导出成功（包含设备信息）", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "写入文件失败: ${e.message}", Toast.LENGTH_LONG).show()
         }

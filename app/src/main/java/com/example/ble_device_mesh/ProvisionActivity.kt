@@ -232,6 +232,29 @@ class ProvisionActivity : ComponentActivity() {
                 return@setOnClickListener
             }
 
+            // 检查 Mesh 网络是否已加载，以及该地址是否存在于网络中
+            val meshNetwork = viewModel.meshNetWork
+            if (meshNetwork == null) {
+                // 网络未加载，提示用户先导入配置
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("网络未加载")
+                    .setMessage("未检测到 Mesh 网络配置。\n\n请先在「设置」中导入其他设备分享的配置文件，\n或先配网第一个设备。")
+                    .setPositiveButton("去设置") { _, _ ->
+                        startActivity(android.content.Intent(this, SettingsActivity::class.java))
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+                dialog.dismiss()
+                return@setOnClickListener
+            }
+
+            // 检查网络中是否存在该地址的节点
+            val node = meshNetwork.getNode(address)
+            if (node == null) {
+                Toast.makeText(this, "网络中不存在地址 0x${address.toString(16)} 的节点，请检查地址是否正确", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+
             val deviceType = when (spinnerDeviceType.selectedItemPosition) {
                 0 -> com.example.ble_device_mesh.data.DeviceType.LIGHT
                 1 -> com.example.ble_device_mesh.data.DeviceType.SWITCH
@@ -266,12 +289,57 @@ class ProvisionActivity : ComponentActivity() {
         val etDeviceAddress = dialogView.findViewById<android.widget.EditText>(R.id.etDeviceAddress)
         val spinnerAppKey = dialogView.findViewById<android.widget.Spinner>(R.id.spinnerAppKey)
 
-        // 默认名称
-        etDeviceName.setText("CH592 设备")
-
         // 默认地址：下一个可用地址
         val nextAddr = viewModel.getNextAvailableAddress()
         etDeviceAddress.setText("0x${nextAddr.toString(16).padStart(4, '0')}")
+
+        // 设备类型选择器
+        val spinnerDeviceType = dialogView.findViewById<android.widget.Spinner>(R.id.spinnerDeviceType)
+        val deviceTypeNames = arrayOf("灯光", "开关", "传感器", "其他")
+        val typeAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, deviceTypeNames)
+        typeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerDeviceType.adapter = typeAdapter
+
+        // 统计已有设备数量，用于自动命名
+        val deviceRepo = com.example.ble_device_mesh.data.DeviceRepository(this)
+        val existingDevices = deviceRepo.getAllDevices()
+        fun getDeviceTypeFromPosition(pos: Int): com.example.ble_device_mesh.data.DeviceType {
+            return when (pos) {
+                0 -> com.example.ble_device_mesh.data.DeviceType.LIGHT
+                1 -> com.example.ble_device_mesh.data.DeviceType.SWITCH
+                2 -> com.example.ble_device_mesh.data.DeviceType.SENSOR
+                else -> com.example.ble_device_mesh.data.DeviceType.OTHER
+            }
+        }
+        fun getTypeName(type: com.example.ble_device_mesh.data.DeviceType): String {
+            return when (type) {
+                com.example.ble_device_mesh.data.DeviceType.LIGHT -> "灯"
+                com.example.ble_device_mesh.data.DeviceType.SWITCH -> "开关"
+                com.example.ble_device_mesh.data.DeviceType.SENSOR -> "传感器"
+                com.example.ble_device_mesh.data.DeviceType.OTHER -> "其他"
+            }
+        }
+        fun generateName(typePos: Int): String {
+            val deviceType = getDeviceTypeFromPosition(typePos)
+            val prefix = getTypeName(deviceType)
+            val existingNames = existingDevices.filter { it.type == deviceType }.map { it.name }.toSet()
+            var num = 1
+            while ("$prefix $num" in existingNames) {
+                num++
+            }
+            return "$prefix $num"
+        }
+
+        // 默认名称：根据设备类型数量自动生成
+        etDeviceName.setText(generateName(0))
+
+        // 类型切换时更新名称
+        spinnerDeviceType.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                etDeviceName.setText(generateName(position))
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
 
         // 设置 AppKey 选择器
         val appKeyNames = viewModel.getAppKeyNames()
@@ -328,13 +396,17 @@ class ProvisionActivity : ComponentActivity() {
                 return@setOnClickListener
             }
 
+            val deviceType = getDeviceTypeFromPosition(spinnerDeviceType.selectedItemPosition)
+            val mac = viewModel.getMacForUnprovisionedNode(device.deviceUuid)
             val config = MeshViewModel.ProvisionConfig(
                 deviceName = name,
                 unicastAddress = address,
-                appKeyIndex = spinnerAppKey.selectedItemPosition
+                appKeyIndex = spinnerAppKey.selectedItemPosition,
+                deviceType = deviceType,
+                bluetoothMac = mac
             )
 
-            Log.d("ProvisionActivity", "配网配置: name=$name, address=0x${address.toString(16)}, appKey=${spinnerAppKey.selectedItemPosition}")
+            Log.d("ProvisionActivity", "配网配置: name=$name, address=0x${address.toString(16)}, appKey=${spinnerAppKey.selectedItemPosition}, type=$deviceType")
             dialog.dismiss()
             viewModel.provisionDevice(device, config)
         }

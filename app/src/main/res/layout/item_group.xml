@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="12dp"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="3dp"
+    app:cardPreventCornerOverlap="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <!-- 左侧彩色装饰条 -->
+        <View
+            android:id="@+id/viewAccent"
+            android:layout_width="4dp"
+            android:layout_height="match_parent"
+            android:background="#2196F3" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <!-- 顶部行：名称 + 编辑 + 地址 + 设备数 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <!-- 在线状态指示点 -->
+                <View
+                    android:id="@+id/viewOnlineDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/circle_green" />
+
+                <TextView
+                    android:id="@+id/tvGroupName"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="客厅灯"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#333333"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/btnRenameGroup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="✏️"
+                    android:textSize="14sp"
+                    android:padding="6dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tvGroupAddress"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0xC000"
+                    android:textSize="11sp"
+                    android:textColor="#999999"
+                    android:typeface="monospace"
+                    android:layout_marginStart="4dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="|"
+                    android:textSize="11sp"
+                    android:textColor="#E0E0E0"
+                    android:layout_marginStart="6dp"
+                    android:layout_marginEnd="6dp" />
+
+                <TextView
+                    android:id="@+id/tvMemberCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 台"
+                    android:textSize="11sp"
+                    android:textColor="#666666" />
+
+                <!-- 编辑按钮 -->
+                <TextView
+                    android:id="@+id/btnRenameGroupEnd"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="✏️"
+                    android:textSize="14sp"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="2dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+            </LinearLayout>
+
+            <!-- 分割线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#F0F0F0"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="10dp" />
+
+            <!-- 控制区 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <Button
+                    android:id="@+id/btnGroupOnOff"
+                    android:layout_width="48dp"
+                    android:layout_height="40dp"
+                    android:text="开"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:minWidth="0dp"
+                    android:padding="0dp"
+                    android:backgroundTint="#4CAF50" />
+
+                <SeekBar
+                    android:id="@+id/seekBarGroupBrightness"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="10dp"
+                    android:layout_marginEnd="10dp"
+                    android:max="100"
+                    android:progress="50" />
+
+                <TextView
+                    android:id="@+id/tvGroupBrightness"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="50"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="#333333"
+                    android:minWidth="30dp"
+                    android:gravity="center" />
+
+            </LinearLayout>
+
+            <!-- 设备在线状态摘要 -->
+            <LinearLayout
+                android:id="@+id/layoutDeviceStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="●"
+                    android:textSize="8sp"
+                    android:textColor="#4CAF50"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/tvDeviceStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="2/3 台在线"
+                    android:textSize="11sp"
+                    android:textColor="#999999" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView>

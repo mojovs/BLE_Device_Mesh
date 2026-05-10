@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -28,14 +29,17 @@ import androidx.activity.viewModels
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ble_device_mesh.data.GroupRepository
 import com.example.ble_device_mesh.data.MeshDevice
+import com.example.ble_device_mesh.data.MeshGroup
 
 class DeviceDetailActivity : ComponentActivity() {
-    
+
     private val viewModel: MeshViewModel by viewModels()
     private lateinit var device: MeshDevice
     private lateinit var scanAdapter: DeviceAdapter
     private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
+    private val groupRepository by lazy { GroupRepository(this) }
     private var isInitialSelection = true  // 标记是否是初始化时的选择
 
     // 亮度拖动节流
@@ -122,14 +126,13 @@ class DeviceDetailActivity : ComponentActivity() {
         val btnConnect = findViewById<Button>(R.id.btnConnect)
         val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
         val tvDeviceInfo = findViewById<TextView>(R.id.tvDeviceInfo)
-        val spinnerDeviceMac = findViewById<Spinner>(R.id.spinnerDeviceMac)
-        val etGroupAddress = findViewById<EditText>(R.id.etGroupAddress)
-        val btnSaveGroupAddress = findViewById<Button>(R.id.btnSaveGroupAddress)
         val tvBrightnessValue = findViewById<TextView>(R.id.tvBrightnessValue)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarBrightness)
         val btnBrightnessDown = findViewById<Button>(R.id.btnBrightnessDown)
         val btnBrightnessUp = findViewById<Button>(R.id.btnBrightnessUp)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
+        val spinnerGroup = findViewById<Spinner>(R.id.spinnerGroupSelect)
+        val btnCreateGroup = findViewById<Button>(R.id.btnCreateGroup)
 
         // 设置标题
         val savedMac = getDeviceMac(device.address)
@@ -140,35 +143,91 @@ class DeviceDetailActivity : ComponentActivity() {
             finish()
         }
 
-        // 显示当前 Group 地址
-        if (device.groupAddress != null) {
-            etGroupAddress.setText("0x${device.groupAddress!!.toString(16).uppercase()}")
+        // ========== 分组选择 Spinner ==========
+        fun refreshGroupSpinner(selectGroupId: String? = null) {
+            val groups = groupRepository.getAllGroups()
+            val items = mutableListOf("无分组")
+            items.addAll(groups.map { "${it.name} (0x${it.address.toString(16).uppercase()})" })
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerGroup.adapter = adapter
+
+            // 选择设备当前所属分组
+            if (selectGroupId != null) {
+                val idx = groups.indexOfFirst { it.id == selectGroupId }
+                if (idx >= 0) spinnerGroup.setSelection(idx + 1)
+            } else {
+                val currentGroups = groupRepository.getGroupsForDevice(device.id)
+                if (currentGroups.isNotEmpty()) {
+                    val idx = groups.indexOfFirst { it.id == currentGroups[0].id }
+                    if (idx >= 0) spinnerGroup.setSelection(idx + 1)
+                }
+            }
         }
 
-        // 保存 Group 地址按钮
-        btnSaveGroupAddress.setOnClickListener {
-            val input = etGroupAddress.text.toString().trim()
+        refreshGroupSpinner()
 
-            if (input.isEmpty()) {
-                // 清空 Group 地址，使用 Unicast 地址
-                device.groupAddress = null
-                deviceRepository.updateDevice(device)
-                Toast.makeText(this, "已清空 Group 地址，将使用 Unicast 地址 0x${device.address.toString(16).uppercase()}", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
+        isInitialSelection = true
+        spinnerGroup.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (isInitialSelection) { isInitialSelection = false; return }
+                val groups = groupRepository.getAllGroups()
+                val prevGroups = groupRepository.getGroupsForDevice(device.id)
 
-            try {
-                val address = if (input.startsWith("0x", ignoreCase = true)) {
-                    input.substring(2).toInt(16)
+                if (position == 0) {
+                    // 选择"无分组"：取消订阅所有分组
+                    prevGroups.forEach { group ->
+                        viewModel.unsubscribeDeviceFromGroup(device.address, group.address)
+                        val updated = group.copy(memberDeviceIds = group.memberDeviceIds - device.id)
+                        groupRepository.updateGroup(updated)
+                    }
+                    device.groupIds = mutableListOf()
+                    device.groupAddress = null
+                    deviceRepository.updateDevice(device)
+                    Toast.makeText(this@DeviceDetailActivity, "已取消订阅所有分组", Toast.LENGTH_SHORT).show()
                 } else {
-                    input.toInt()
+                    val selectedGroup = groups.getOrNull(position - 1) ?: return
+                    // 先取消旧分组
+                    prevGroups.forEach { oldGroup ->
+                        if (oldGroup.id != selectedGroup.id) {
+                            viewModel.unsubscribeDeviceFromGroup(device.address, oldGroup.address)
+                            val updated = oldGroup.copy(memberDeviceIds = oldGroup.memberDeviceIds - device.id)
+                            groupRepository.updateGroup(updated)
+                        }
+                    }
+                    // 订阅新分组
+                    if (device.groupIds?.contains(selectedGroup.id) != true) {
+                        viewModel.subscribeDeviceToGroup(device.address, selectedGroup.address)
+                    }
+                    val updatedGroup = selectedGroup.copy(
+                        memberDeviceIds = (selectedGroup.memberDeviceIds + device.id).distinct()
+                    )
+                    groupRepository.updateGroup(updatedGroup)
+                    device.groupIds = mutableListOf(selectedGroup.id)
+                    device.groupAddress = selectedGroup.address
+                    deviceRepository.updateDevice(device)
+                    Toast.makeText(this@DeviceDetailActivity, "已加入分组：${selectedGroup.name}", Toast.LENGTH_SHORT).show()
                 }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
 
-                device.groupAddress = address
+        // 创建新分组
+        btnCreateGroup.setOnClickListener {
+            showCreateGroupDialog { newGroup ->
+                groupRepository.addGroup(newGroup)
+                refreshGroupSpinner(newGroup.id)
+                isInitialSelection = true
+                // 触发订阅
+                viewModel.subscribeDeviceToGroup(device.address, newGroup.address)
+                val updatedGroup = newGroup.copy(
+                    memberDeviceIds = (newGroup.memberDeviceIds + device.id).distinct()
+                )
+                groupRepository.updateGroup(updatedGroup)
+                device.groupIds = mutableListOf(newGroup.id)
+                device.groupAddress = newGroup.address
                 deviceRepository.updateDevice(device)
-                Toast.makeText(this, "Group 地址已保存: 0x${address.toString(16).uppercase()}", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this, "地址格式错误", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已创建并加入分组：${newGroup.name}", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -245,37 +304,39 @@ class DeviceDetailActivity : ComponentActivity() {
         setupProxySpinner(spinnerProxyAddress)
         
         // 设置设备 MAC 地址 Spinner
-        setupDeviceMacSpinner(spinnerDeviceMac)
         
         // Spinner 选择监听 - 自动连接
         spinnerProxyAddress.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
                 Log.d("DeviceDetailActivity", "onItemSelected 被调用: position=$position, isInitialSelection=$isInitialSelection")
-                
+
                 // 跳过初始化时的自动触发
                 if (isInitialSelection) {
                     isInitialSelection = false
                     Log.d("DeviceDetailActivity", "跳过初始选择")
                     return
                 }
-                
+
                 val selectedItem = spinnerProxyAddress.selectedItem?.toString()
                 Log.d("DeviceDetailActivity", "选择的项: $selectedItem")
-                
+
                 // 避免在初始化时触发连接
                 if (selectedItem.isNullOrEmpty() || selectedItem == "未连接") return
-                
+
+                // 从 "名称 (MAC)" 格式中提取 MAC
+                val selectedMac = extractMacFromItem(selectedItem)
+
                 // 如果选择的是当前已连接的地址，不重复连接
                 val currentAddress = viewModel.connectedDeviceAddress.value
-                if (selectedItem == currentAddress) {
+                if (selectedMac == currentAddress) {
                     Log.d("DeviceDetailActivity", "已经连接到该地址")
                     return
                 }
-                
-                // 选择了历史 MAC 地址，自动连接
-                viewModel.connectToAddress(selectedItem)
+
+                // 选择了历史地址，自动连接
+                viewModel.connectToAddress(selectedMac)
             }
-            
+
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
         
@@ -519,8 +580,13 @@ class DeviceDetailActivity : ComponentActivity() {
 
         btnRebindAppKey.setOnClickListener {
             if (viewModel.isConnected.value == true) {
+                btnRebindAppKey.isEnabled = false
                 viewModel.rebindAppKey(device.address)
                 Toast.makeText(this, "正在重新绑定模型...", Toast.LENGTH_SHORT).show()
+                // 5 秒后重新启用，防止重复点击
+                btnRebindAppKey.postDelayed({
+                    btnRebindAppKey.isEnabled = true
+                }, 5000)
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }
@@ -537,7 +603,9 @@ class DeviceDetailActivity : ComponentActivity() {
             val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
 
             if (connected) {
-                tvConnectionStatus.text = "已连接"
+                val mac = viewModel.connectedDeviceAddress.value
+                val name = if (mac != null) viewModel.getDeviceNameForMac(mac) else null
+                tvConnectionStatus.text = if (name != null) "已连接到 $name" else "已连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
                 tvSignalStrength.visibility = View.VISIBLE
                 // 延迟更新信号强度，等待 RSSI 数据准备好
@@ -552,6 +620,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnReadTime.isEnabled = true
                 btnSyncTime.isEnabled = true
                 btnRebindAppKey.isEnabled = true
+                findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
             } else {
                 tvSignalStrength.visibility = View.GONE
@@ -566,6 +635,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnReadTime.isEnabled = false
                 btnSyncTime.isEnabled = false
                 btnRebindAppKey.isEnabled = false
+                findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = false
                 spinnerProxyAddress.isEnabled = true
 
                 // 刷新 Spinner 列表（可能有新的历史记录）
@@ -649,6 +719,9 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
+        // 转发配置
+        setupRelayConfigCard()
+
         // 手动触发一次 UI 更新，处理进入页面时已经连接的情况
         if (viewModel.isConnected.value == true) {
             tvConnectionStatus.text = "已连接"
@@ -663,6 +736,7 @@ class DeviceDetailActivity : ComponentActivity() {
             findViewById<Button>(R.id.btnReadTime).isEnabled = true
             findViewById<Button>(R.id.btnSyncTime).isEnabled = true
             findViewById<Button>(R.id.btnRebindAppKey).isEnabled = true
+            findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
             findViewById<Spinner>(R.id.spinnerProxyAddress).isEnabled = false
         }
     }
@@ -758,20 +832,90 @@ class DeviceDetailActivity : ComponentActivity() {
         }
     }
 
-        private fun setupProxySpinner(spinner: Spinner) {
+    /**
+     * 设置转发配置卡片
+     */
+    private fun setupRelayConfigCard() {
+        setupCollapsible(R.id.headerRelay, R.id.bodyRelay, R.id.iconRelay, false)
+
+        val seekbarCount = findViewById<SeekBar>(R.id.seekbarTransmitCount)
+        val seekbarInterval = findViewById<SeekBar>(R.id.seekbarTransmitInterval)
+        val tvCount = findViewById<TextView>(R.id.tvTransmitCount)
+        val tvInterval = findViewById<TextView>(R.id.tvTransmitInterval)
+        val btnSave = findViewById<Button>(R.id.btnSaveRelay)
+
+        // 显示当前值
+        tvCount.text = "${seekbarCount.progress + 1}"
+        tvInterval.text = "${(seekbarInterval.progress + 1) * 10}ms"
+
+        seekbarCount.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvCount.text = "${progress + 1}"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        seekbarInterval.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvInterval.text = "${(progress + 1) * 10}ms"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        btnSave.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                val count = seekbarCount.progress
+                val interval = seekbarInterval.progress
+                val targetAddress = device.groupAddress ?: device.address
+
+                // 设置网络发送次数和中继转发参数
+                viewModel.setNetworkTransmit(targetAddress, count, interval)
+                viewModel.setRelayConfig(targetAddress, 1, count, interval)  // relay=1 启用中继
+                Toast.makeText(this, "转发设置已发送", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * 提取 Spinner 选中项中的 MAC 地址
+     * 格式可能是 "D4:8A:FC:12:34:56" 或 "客厅灯 (D4:8A:FC:12:34:56)"
+     */
+    private fun extractMacFromItem(item: String): String {
+        val start = item.lastIndexOf('(')
+        val end = item.lastIndexOf(')')
+        return if (start >= 0 && end > start) {
+            item.substring(start + 1, end)
+        } else {
+            item
+        }
+    }
+
+    /**
+     * 格式化 Spinner 显示项：优先显示设备名称
+     */
+    private fun formatSpinnerItem(mac: String): String {
+        val name = viewModel.getDeviceNameForMac(mac)
+        return if (name != null) "$name ($mac)" else mac
+    }
+
+    private fun setupProxySpinner(spinner: Spinner) {
         val history = viewModel.getProxyAddressHistory().toMutableList()
-        
-        // 只显示历史地址
+
+        // 显示设备名称，无名称时回退到 MAC
         val items = if (history.isEmpty()) {
             listOf("未连接")
         } else {
-            history
+            history.map { formatSpinnerItem(it) }
         }
-        
+
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinner.adapter = adapter
-        
+
         // 如果当前已连接，选择当前连接的地址
         val currentAddress = viewModel.connectedDeviceAddress.value
         if (currentAddress != null && history.contains(currentAddress)) {
@@ -781,67 +925,9 @@ class DeviceDetailActivity : ComponentActivity() {
             // 默认选择第一个历史地址
             spinner.setSelection(0)
         }
-        
+
         // 重置标志，因为 setAdapter 会触发 onItemSelected
         isInitialSelection = true
-    }
-    
-    private fun setupDeviceMacSpinner(spinner: Spinner) {
-        val history = viewModel.getProxyAddressHistory().toMutableList()
-        
-        if (history.isEmpty()) {
-            spinner.visibility = View.GONE
-            return
-        }
-        
-        spinner.visibility = View.VISIBLE
-        
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, history)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinner.adapter = adapter
-        
-        // 读取该设备保存的 MAC 地址
-        val savedMac = getDeviceMac(device.address)
-        if (savedMac != null && history.contains(savedMac)) {
-            val index = history.indexOf(savedMac)
-            spinner.setSelection(index)
-        } else {
-            val defaultMac = history[0]
-            saveDeviceMac(device.address, defaultMac)
-            spinner.setSelection(0)
-            findViewById<android.widget.TextView>(R.id.tvTitle).text = "${device.name}  $defaultMac"
-        }
-
-        // 选择监听 - 保存设备 MAC 地址
-        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            private var isFirstSelection = true
-            
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (isFirstSelection) {
-                    isFirstSelection = false
-                    return
-                }
-                
-                val selectedMac = spinner.selectedItem?.toString()
-                if (!selectedMac.isNullOrEmpty()) {
-                    // 保存该设备的 MAC 地址
-                    saveDeviceMac(device.address, selectedMac)
-                    findViewById<TextView>(R.id.tvTitle).text = "${device.name}  $selectedMac"
-                    Toast.makeText(this@DeviceDetailActivity, "已保存设备 MAC: $selectedMac", Toast.LENGTH_SHORT).show()
-                    
-                    // 更新设备信息显示
-                    val tvDeviceInfo = findViewById<TextView>(R.id.tvDeviceInfo)
-                    tvDeviceInfo.text = """
-                        名称: ${device.name}
-                        地址: 0x${device.address.toString(16).uppercase()}
-                        类型: ${getDeviceTypeName(device.type)}
-                        MAC: $selectedMac
-                    """.trimIndent()
-                }
-            }
-            
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
     }
     
     private fun saveDeviceMac(deviceAddress: Int, macAddress: String) {
@@ -1046,5 +1132,31 @@ class DeviceDetailActivity : ComponentActivity() {
                 tvSignalStrength.setTextColor(getColor(android.R.color.holo_red_light))
             }
         }
+    }
+
+    private fun showCreateGroupDialog(onCreated: (MeshGroup) -> Unit) {
+        val input = EditText(this)
+        input.hint = "输入分组名称"
+        input.inputType = android.text.InputType.TYPE_CLASS_TEXT
+
+        AlertDialog.Builder(this)
+            .setTitle("创建新分组")
+            .setView(input)
+            .setPositiveButton("创建") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "请输入分组名称", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val address = groupRepository.allocateGroupAddress()
+                val group = MeshGroup(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = name,
+                    address = address
+                )
+                onCreated(group)
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }
