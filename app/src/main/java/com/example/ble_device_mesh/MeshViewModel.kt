@@ -1108,9 +1108,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                                   ((data[valueOffset + 2].toInt() and 0xFF) shl 16)
 
                         // 固件存储的是原始ADC值（0-4095，12位ADC）
-                        // 直接显示原始值，让用户看到实际的光敏电阻读数
-                        Log.d("MeshApp", "解析到光照度: raw=$raw (Src: 0x${src.toString(16)})")
-                        MeshState.lightLevelUpdates.postValue(Pair(src, raw.toFloat()))
+                        // 转换为百分比显示（0-100%）
+                        val percent = (raw.toFloat() / 4095f * 100f).coerceIn(0f, 100f)
+                        Log.d("MeshApp", "解析到光照度: raw=$raw -> ${"%.1f".format(percent)}% (Src: 0x${src.toString(16)})")
+                        MeshState.lightLevelUpdates.postValue(Pair(src, percent))
                     }
                 }
             } catch (e: Exception) {
