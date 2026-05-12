@@ -1,58 +1,83 @@
-"""根据 images/app图标.png 生成所有 Android 图标资源"""
-from PIL import Image
-import os
+#!/usr/bin/env python3
+"""Android 应用图标生成工具
 
-SRC = "images/app图标.png"
+用法:
+    python scripts/generate_icons.py <图片路径>
+
+示例:
+    python scripts/generate_icons.py images/app图标.png
+
+说明:
+    将一张方形原图缩放生成所有 mipmap 密度目录下的 ic_launcher.png / ic_launcher_round.png，
+    以及 drawable 目录下的 ic_app_foreground.png（自适应图标前景），
+    并清理旧的 .webp 图标文件。
+"""
+import sys
+import os
+from PIL import Image
+
+# 各 mipmap 密度对应的像素尺寸
 DENSITIES = {
-    "mdpi":   48,
-    "hdpi":   72,
-    "xhdpi":  96,
-    "xxhdpi": 144,
+    "mdpi":    48,
+    "hdpi":    72,
+    "xhdpi":   96,
+    "xxhdpi":  144,
     "xxxhdpi": 192,
 }
 
-MIPMAP_BASE = "app/src/main/res"
+# 自适应图标前景图尺寸（viewport 108dp × 2）
+FOREGROUND_SIZE = 216
 
-def main():
-    img = Image.open(SRC).convert("RGBA")
+MIPMAP_BASE = "app/src/main/res"
+DRAWABLE_DIR = "app/src/main/res/drawable"
+
+
+def make_icons(src_path: str) -> None:
+    img = Image.open(src_path).convert("RGBA")
     print(f"源图: {img.size}, Mode={img.mode}")
 
-    # 1. 生成各密度 mipmap PNG（覆盖原来的 webp）
+    # 1. 生成各密度的 mipmap PNG
     for density, size in DENSITIES.items():
         mipmap_dir = os.path.join(MIPMAP_BASE, f"mipmap-{density}")
         os.makedirs(mipmap_dir, exist_ok=True)
 
         resized = img.resize((size, size), Image.LANCZOS)
-        # launcher icon
-        path = os.path.join(mipmap_dir, "ic_launcher.png")
-        resized.save(path, "PNG")
-        print(f"  OK {path} ({size}x{size})")
-        # round icon
-        path_r = os.path.join(mipmap_dir, "ic_launcher_round.png")
-        resized.save(path_r, "PNG")
-        print(f"  OK {path_r} ({size}x{size})")
 
-    # 2. 为自适应图标生成前景图 (放在 drawable 目录)
-    # 自适应图标 viewport = 108dp, 取 2x 分辨率 216x216
-    drawable_dir = os.path.join(MIPMAP_BASE, "../res/drawable")
-    drawable_dir = os.path.normpath(drawable_dir)
-    os.makedirs(drawable_dir, exist_ok=True)
+        for name in ("ic_launcher.png", "ic_launcher_round.png"):
+            path = os.path.join(mipmap_dir, name)
+            resized.save(path, "PNG")
+            print(f"  -> {path} ({size}x{size})")
 
-    fg = img.resize((216, 216), Image.LANCZOS)
-    fg_path = os.path.join(drawable_dir, "ic_app_foreground.png")
+        # 删除旧的 webp 文件
+        for old in ("ic_launcher.webp", "ic_launcher_round.webp"):
+            old_path = os.path.join(mipmap_dir, old)
+            if os.path.exists(old_path):
+                os.remove(old_path)
+                print(f"  DEL {old_path}")
+
+    # 2. 生成自适应图标前景图
+    os.makedirs(DRAWABLE_DIR, exist_ok=True)
+    fg = img.resize((FOREGROUND_SIZE, FOREGROUND_SIZE), Image.LANCZOS)
+    fg_path = os.path.join(DRAWABLE_DIR, "ic_app_foreground.png")
     fg.save(fg_path, "PNG")
-    print(f"  OK {fg_path} (216x216)")
-
-    # 3. 删除旧的 webp 文件 (避免编译冲突)
-    for density in DENSITIES:
-        mipmap_dir = os.path.join(MIPMAP_BASE, f"mipmap-{density}")
-        for fname in ["ic_launcher.webp", "ic_launcher_round.webp"]:
-            fpath = os.path.join(mipmap_dir, fname)
-            if os.path.exists(fpath):
-                os.remove(fpath)
-                print(f"  DEL {fpath}")
+    print(f"  -> {fg_path} ({FOREGROUND_SIZE}x{FOREGROUND_SIZE})")
 
     print("\n完成！所有图标已生成。")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"用法: python {sys.argv[0]} <图片路径>")
+        print(f"示例: python {sys.argv[0]} images/app图标.png")
+        sys.exit(1)
+
+    src = sys.argv[1]
+    if not os.path.isfile(src):
+        print(f"错误: 文件不存在 - {src}")
+        sys.exit(1)
+
+    make_icons(src)
+
 
 if __name__ == "__main__":
     main()
