@@ -105,6 +105,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 自动模型绑定队列
         var configBindQueue = mutableListOf<Pair<Int, Int>>()
         var configBindIndex = 0
+        var configAppKeyIndex = 0
 
         // MIUI 兼容：记录上次配网 PDU 写入时间，确保相邻 PDU 间隔足够
         var lastProvisioningWriteTime = 0L
@@ -300,8 +301,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                             return
                         }
                         0x803E -> {  // ConfigModelAppStatus
-                            Log.d("MeshApp", "收到 ConfigModelAppStatus（已跳过自动绑定）")
+                            Log.d("MeshApp", "收到 ConfigModelAppStatus（已收到绑定回复），继续绑定下一个模型...")
                             MeshState.configTimeoutRunnable?.let { MeshState.mainHandler.removeCallbacks(it) }
+                            MeshState.configBindIndex++
+                            sendNextBind(MeshState.configTargetAddress, MeshState.configAppKeyIndex)
                             return
                         }
                     }
@@ -1011,60 +1014,31 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         while (offset < data.size) {
             try {
                 val byte0 = data[offset].toInt()
-                
-                // 检测 CH592 固件自定义格式
-                // 固件逻辑: byte0 = (1 << 1) | ((propId >> 10) & 1)
-                // PropID = 0x0071 (温度), 0000001110001
-                // propId >> 10 = 0
-                // byte0 = 2 | 0 = 2
-                if ((byte0 and 0xFE) == 0x02 && offset + 3 < data.size) {
-                    val byte1 = data[offset + 1].toInt()
-                    val byte2 = data[offset + 2].toInt()
 
-                    val propIdMsb = (byte0 and 0x01)
-                    val propIdMid = (byte1 and 0xFF)
-                    val propIdLsb = (byte2 shr 6) and 0x03
-
-                    val customPropId = (propIdMsb shl 10) or (propIdMid shl 2) or propIdLsb
-
-                    Log.d("MeshApp", "Custom PropID Check: 0x${customPropId.toString(16)}")
-
-                    if (customPropId == 0x004D || customPropId == 0x004F || customPropId == 0x0071) {
-                        val byte3 = data[offset + 3].toInt()
-                        val valHigh = (byte2 and 0x3F)
-                        val valLow = (byte3 shr 6) and 0x03
-                        val rawValue = (valHigh shl 2) or valLow
-                        val tempVal = rawValue.toByte() * 0.5f
-
-                        Log.d("MeshApp", "解析到温度 (自定义 PropID=0x${customPropId.toString(16)}): $tempVal (Src: 0x${src.toString(16)})")
-                        MeshState.temperatureUpdates.postValue(Pair(src, tempVal))
-
-                        offset += 4
-                        continue
-                    }
-                }
-
-                // 标准格式解析
-                val format = (byte0 shr 7) and 1
+                // 标准格式解析 (Mesh Spec)
+                // bit0 = format: 0=Format A, 1=Format B
+                val format = byte0 and 1
                 var length = 0
                 var propertyId = 0
                 var valueOffset = 0
-                
+
                 if (format == 0) {
-                    // Format A
+                    // Format A: 2字节头
+                    // byte0: bit0=0, bits1-4=length-1, bits5-7=upper 3 bits of PropID
+                    // byte1: lower 8 bits of PropID
                     if (offset + 1 >= data.size) break
                     val lenCode = (byte0 shr 1) and 0xF
-                    length = if (lenCode == 0xF) 0 else lenCode + 1 
-                    val propIdLow = (byte0 shr 5) and 0x7
-                    val propIdHigh = data[offset + 1].toInt() and 0xFF
-                    propertyId = (propIdHigh shl 3) or propIdLow
+                    length = if (lenCode == 0xF) 0 else lenCode + 1
+                    val upper3Bits = (byte0 shr 5) and 0x7
+                    val lower8Bits = data[offset + 1].toInt() and 0xFF
+                    propertyId = (upper3Bits shl 8) or lower8Bits
                     valueOffset = offset + 2
                     offset += 2 + length
                 } else {
-                    // Format B: bit7=1, bit6-0=length code
+                    // Format B: 3字节头, byte0 bit0=1, bits1-6=length-1
                     if (offset + 2 >= data.size) break
-                    val lenCode = byte0 and 0x7F  // 取低7位作为 length code
-                    length = if (lenCode == 0x7F) 0 else lenCode + 1
+                    val lenCode = (byte0 shr 1) and 0x3F
+                    length = if (lenCode == 0x3F) 0 else lenCode + 1
                     // Property ID 小端序：Byte1=低字节, Byte2=高字节
                     propertyId = ((data[offset + 2].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
                     valueOffset = offset + 3
@@ -2213,6 +2187,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             onConfigurationComplete(address)
             return
         }
+        MeshState.configAppKeyIndex = appKey.keyIndex
 
         MeshState.configState = CONFIG_BINDING
 
