@@ -2,6 +2,7 @@ package com.example.ble_device_mesh
 
 import android.app.AlertDialog
 import android.os.Bundle
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.view.LayoutInflater
@@ -9,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -27,15 +29,21 @@ class GroupManagementActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_group_management)
+        try {
+            setContentView(R.layout.activity_group_management)
 
-        groupRepository = GroupRepository(this)
+            groupRepository = GroupRepository(this)
 
-        findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
-        findViewById<Button>(R.id.btnAddGroup).setOnClickListener { showCreateGroupDialog() }
+            findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
+            findViewById<Button>(R.id.btnAddGroup).setOnClickListener { showCreateGroupDialog() }
 
-        setupList()
-        loadGroups()
+            setupList()
+            loadGroups()
+        } catch (e: Exception) {
+            Log.e("GroupManagement", "onCreate error: ${e.message}", e)
+            Toast.makeText(this, "分组页面加载失败: ${e.message}", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
 
     private fun setupList() {
@@ -50,13 +58,17 @@ class GroupManagementActivity : ComponentActivity() {
     private fun loadGroups() {
         val groups = groupRepository.getAllGroups()
         adapter.updateGroups(groups)
-        findViewById<TextView>(R.id.tvEmpty).visibility =
+        findViewById<LinearLayout>(R.id.tvEmpty).visibility =
             if (groups.isEmpty()) View.VISIBLE else View.GONE
     }
 
     override fun onResume() {
         super.onResume()
-        loadGroups()
+        try {
+            loadGroups()
+        } catch (e: Exception) {
+            Log.e("GroupManagement", "onResume error: ${e.message}", e)
+        }
     }
 
     private fun showCreateGroupDialog() {
@@ -208,7 +220,7 @@ class GroupManagementActivity : ComponentActivity() {
                     .setPositiveButton("删除") { _, _ ->
                         groupRepository.deleteGroup(group.id)
                         updateGroups(groupRepository.getAllGroups())
-                        findViewById<TextView>(R.id.tvEmpty).visibility =
+                        findViewById<LinearLayout>(R.id.tvEmpty).visibility =
                             if (groups.isEmpty()) View.VISIBLE else View.GONE
                     }
                     .setNegativeButton("取消", null)

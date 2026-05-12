@@ -11,33 +11,34 @@
         android:text="添加设备"
         android:textSize="20sp"
         android:textStyle="bold"
-        android:textColor="#333333"
-        android:layout_marginBottom="16dp"/>
+        android:textColor="#1C1B1F"
+        android:layout_marginBottom="20dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="设备名称"
-        android:textSize="14sp"
-        android:textColor="#666666"
-        android:layout_marginBottom="4dp"/>
+        android:textSize="13sp"
+        android:textColor="#6B7280"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etDeviceName"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="例如：客厅灯"
-        android:padding="12dp"
+        android:padding="14dp"
         android:background="@android:drawable/edit_text"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="16dp"
+        android:textSize="15sp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Mesh 地址"
-        android:textSize="14sp"
-        android:textColor="#666666"
-        android:layout_marginBottom="4dp"/>
+        android:textSize="13sp"
+        android:textColor="#6B7280"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etDeviceAddress"
@@ -45,24 +46,25 @@
         android:layout_height="wrap_content"
         android:hint="例如：0x0005"
         android:inputType="text"
-        android:padding="12dp"
+        android:padding="14dp"
         android:background="@android:drawable/edit_text"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="16dp"
+        android:textSize="15sp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="设备类型"
-        android:textSize="14sp"
-        android:textColor="#666666"
-        android:layout_marginBottom="8dp"/>
+        android:textSize="13sp"
+        android:textColor="#6B7280"
+        android:layout_marginBottom="8dp" />
 
     <Spinner
         android:id="@+id/spinnerDeviceType"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="12dp"
-        android:layout_marginBottom="24dp"/>
+        android:layout_marginBottom="24dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -75,15 +77,17 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="取消"
-            android:textColor="#666666"
-            style="?android:attr/borderlessButtonStyle"/>
+            android:textColor="#6B7280"
+            style="?android:attr/borderlessButtonStyle" />
 
         <Button
             android:id="@+id/btnConfirm"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="添加"
-            android:layout_marginStart="8dp"/>
+            android:layout_marginStart="8dp"
+            android:backgroundTint="#1565C0"
+            android:textColor="#FFFFFF" />
 
     </LinearLayout>
 

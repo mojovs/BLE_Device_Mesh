@@ -11,6 +11,7 @@ import no.nordicsemi.android.mesh.MeshManagerCallbacks
 import no.nordicsemi.android.mesh.MeshNetwork
 import no.nordicsemi.android.mesh.MeshStatusCallbacks
 import no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode
+import no.nordicsemi.android.mesh.transport.ConfigModelAppBind
 import no.nordicsemi.android.mesh.transport.ConfigModelSubscriptionAdd
 import no.nordicsemi.android.mesh.transport.ConfigModelSubscriptionDelete
 import no.nordicsemi.android.mesh.transport.ConfigNetworkTransmitSet
@@ -100,6 +101,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         var configState = 0
         var configTargetAddress = 0
         var configTimeoutRunnable: Runnable? = null
+
+        // 自动模型绑定队列
+        var configBindQueue = mutableListOf<Pair<Int, Int>>()
+        var configBindIndex = 0
 
         // MIUI 兼容：记录上次配网 PDU 写入时间，确保相邻 PDU 间隔足够
         var lastProvisioningWriteTime = 0L
@@ -275,6 +280,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     Log.d("MeshApp", "  参数: 无法访问 (${e.message})")
                 }
                 Log.d("MeshApp", "========================")
+
+                // 收到设备消息，标记为在线
+                markDeviceOnline(src)
 
                 // 处理 Config 状态消息（配网后配置回调驱动）
                 if (MeshState.configState != CONFIG_IDLE && MeshState.configTargetAddress == src) {
@@ -733,10 +741,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 if (rediscoveryHandled) return
                 rediscoveryHandled = true
 
-                Log.d("MeshApp", "已使用 Proxy Service，开始配置节点")
+                Log.d("MeshApp", "已使用 Proxy Service，读取设备信息（跳过自动绑定）")
                 MeshState.isConnected.postValue(true)
                 MeshState.connectedDeviceAddress.postValue(device.address)
-                MeshState.provisioningStatus.postValue("正在配置节点...")
+                MeshState.provisioningStatus.postValue("正在读取设备信息...")
                 configureNode(address)
             }
 
@@ -806,7 +814,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 Log.d("MeshApp", "重连成功，已使用 Proxy Service")
                 MeshState.isConnected.postValue(true)
                 MeshState.connectedDeviceAddress.postValue(device.address)
-                MeshState.provisioningStatus.postValue("正在配置节点...")
+                MeshState.provisioningStatus.postValue("正在读取设备信息...")
                 configureNode(address)
             }
 
@@ -1108,8 +1116,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                                   ((data[valueOffset + 2].toInt() and 0xFF) shl 16)
 
                         // 固件存储的是原始ADC值（0-4095，12位ADC）
-                        // 转换为百分比显示（0-100%）
-                        val percent = (raw.toFloat() / 4095f * 100f).coerceIn(0f, 100f)
+                        // 电路: 3.3V→100K→ADC→GL5506→GND, GL5506暗阻大亮阻小
+                        // ADC读值 暗↑亮↓, 需要反转: 暗→0%, 亮→100%
+                        val percent = ((4095f - raw.toFloat()) / 4095f * 100f).coerceIn(0f, 100f)
                         Log.d("MeshApp", "解析到光照度: raw=$raw -> ${"%.1f".format(percent)}% (Src: 0x${src.toString(16)})")
                         MeshState.lightLevelUpdates.postValue(Pair(src, percent))
                     }
@@ -2187,12 +2196,83 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     /**
      * 收到 ConfigAppKeyStatus 或超时后继续
-     * 跳过自动模型绑定，用户可手动通过设备详情页「重新绑定模型」绑定
+     * 自动绑定常用模型（0x1000, 0x1002, 0x1100, 0x1200, 0x1206）使光感/时间/定时可用
      */
     private fun proceedAfterAppKey(address: Int) {
         if (MeshState.configState != CONFIG_WAIT_APPKEY) return
-        Log.d("MeshApp", "AppKey 添加完成，跳过自动模型绑定（用户手动绑定）")
-        onConfigurationComplete(address)
+        val network = MeshState.meshNetWork ?: return
+        val node = network.getNode(address) ?: run {
+            Log.e("MeshApp", "节点 0x${address.toString(16)} 不在网络中")
+            onConfigurationComplete(address)
+            return
+        }
+        val appKey = getSelectedAppKey() ?: run {
+            Log.e("MeshApp", "未找到 AppKey")
+            onConfigurationComplete(address)
+            return
+        }
+
+        MeshState.configState = CONFIG_BINDING
+
+        // 构建绑定队列
+        MeshState.configBindQueue.clear()
+        var hasElements = false
+        node.elements?.forEach { element ->
+            element.value.meshModels?.forEach { (modelId, _) ->
+                hasElements = true
+                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206).contains(modelId)) {
+                    MeshState.configBindQueue.add(Pair(element.value.elementAddress, modelId))
+                }
+            }
+        }
+
+        if (MeshState.configBindQueue.isEmpty()) {
+            if (hasElements) {
+                Log.w("MeshApp", "节点元素中没有需要绑定的模型，配置完成")
+                onConfigurationComplete(address)
+                return
+            }
+            // Fallback: 如果未收到 ConfigCompositionDataStatus（MIUI 等兼容问题），
+            // 直接绑定常用模型到主元素地址
+            val primaryAddr = address
+            Log.w("MeshApp", "节点元素列表为空，使用 fallback 绑定常用模型到 0x${primaryAddr.toString(16)}")
+            val fallbackModels = listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206)
+            fallbackModels.forEach { modelId ->
+                MeshState.configBindQueue.add(Pair(primaryAddr, modelId))
+            }
+            Log.d("MeshApp", "Fallback 绑定 ${MeshState.configBindQueue.size} 个常用模型")
+        }
+
+        MeshState.configBindIndex = 0
+        Log.d("MeshApp", "需要绑定 ${MeshState.configBindQueue.size} 个模型")
+        sendNextBind(address, appKey.keyIndex)
+    }
+
+    private fun sendNextBind(address: Int, appKeyIndex: Int) {
+        if (MeshState.configBindIndex >= MeshState.configBindQueue.size) {
+            Log.d("MeshApp", "所有模型绑定完成")
+            onConfigurationComplete(address)
+            return
+        }
+
+        val (elemAddr, modelId) = MeshState.configBindQueue[MeshState.configBindIndex]
+        MeshState.statusText.postValue("绑定模型 ${MeshState.configBindIndex + 1}/${MeshState.configBindQueue.size} (0x${modelId.toString(16)})...")
+        Log.d("MeshApp", "绑定: element=0x${elemAddr.toString(16)}, model=0x${modelId.toString(16)}, appKey=$appKeyIndex")
+
+        try {
+            MeshState.meshManagerApi.createMeshPdu(
+                address,
+                no.nordicsemi.android.mesh.transport.ConfigModelAppBind(elemAddr, modelId, appKeyIndex)
+            )
+        } catch (e: Exception) {
+            Log.e("MeshApp", "绑定模型 0x${modelId.toString(16)} 失败: ${e.message}")
+        }
+
+        // 每个绑定等待 3 秒后自动继续
+        setConfigTimeout(3000) {
+            MeshState.configBindIndex++
+            sendNextBind(address, appKeyIndex)
+        }
     }
 
     /**
@@ -2554,6 +2634,24 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
+     * 收到设备消息时标记设备为在线
+     */
+    private fun markDeviceOnline(src: Int) {
+        try {
+            val repo = DeviceRepository(getApplication())
+            val devices = repo.getAllDevices()
+            val device = devices.find { it.address == src }
+            if (device != null && !device.isOnline) {
+                device.isOnline = true
+                repo.updateDevice(device)
+                Log.d("MeshApp", "设备 0x${src.toString(16)} 标记为在线")
+            }
+        } catch (e: Exception) {
+            Log.e("MeshApp", "标记设备在线失败: ${e.message}")
+        }
+    }
+
+    /**
      * 从 SharedPreferences 读取设备对应的 BLE MAC 地址
      * 与 DeviceDetailActivity.getDeviceMac() 使用相同的 key
      */
@@ -2566,6 +2664,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         const val CONFIG_IDLE = 0
         const val CONFIG_WAIT_COMPOSITION = 1
         const val CONFIG_WAIT_APPKEY = 2
+        const val CONFIG_BINDING = 3
 
         /** OC6701 Gamma 校正指数 — 数值越大，中高段分配越多分辨率 */
         const val OC6701_GAMMA = 3.0

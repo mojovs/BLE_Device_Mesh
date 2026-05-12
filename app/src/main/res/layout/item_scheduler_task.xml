@@ -3,15 +3,16 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp"
-    app:cardCornerRadius="8dp"
-    app:cardElevation="2dp">
+    android:layout_marginBottom="10dp"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="1dp"
+    app:cardBackgroundColor="#FFFFFF">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="12dp"
+        android:padding="14dp"
         android:gravity="center_vertical">
 
         <!-- 左侧：时间 -->
@@ -26,9 +27,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="07:30"
-                android:textSize="24sp"
+                android:textSize="26sp"
                 android:textStyle="bold"
-                android:textColor="#212121" />
+                android:textColor="#1C1B1F" />
 
             <TextView
                 android:id="@+id/tvRepeat"
@@ -36,8 +37,9 @@
                 android:layout_height="wrap_content"
                 android:text="每天"
                 android:textSize="12sp"
-                android:textColor="#757575"
+                android:textColor="#6B7280"
                 android:paddingTop="2dp" />
+
         </LinearLayout>
 
         <!-- 中间：动作信息 -->
@@ -53,7 +55,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="开灯"
-                android:textSize="14sp"
+                android:textSize="15sp"
                 android:textStyle="bold"
                 android:textColor="#4CAF50" />
 
@@ -63,8 +65,9 @@
                 android:layout_height="wrap_content"
                 android:text="亮度 80%"
                 android:textSize="12sp"
-                android:textColor="#9E9E9E"
+                android:textColor="#9CA3AF"
                 android:paddingTop="2dp" />
+
         </LinearLayout>
 
         <!-- 右侧：启用开关 -->

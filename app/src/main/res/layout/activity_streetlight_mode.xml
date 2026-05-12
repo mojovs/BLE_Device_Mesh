@@ -1,56 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#F5F5F5">
+    android:background="#FAF5F0">
 
-    <!-- 顶部栏 -->
+    <!-- 顶部工具栏 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:minHeight="56dp"
-        android:background="@android:color/white"
-        android:elevation="4dp"
+        android:background="#FF6B35"
         android:gravity="center_vertical"
-        android:paddingStart="16dp"
+        android:paddingStart="4dp"
         android:paddingEnd="16dp"
         android:paddingTop="8dp"
-        android:paddingBottom="8dp">
+        android:paddingBottom="8dp"
+        android:elevation="4dp">
 
         <TextView
             android:id="@+id/btnBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="← 返回"
-            android:textSize="16sp"
-            android:textColor="#2196F3"
-            android:padding="8dp"
-            android:background="?android:attr/selectableItemBackground"/>
+            android:text="←"
+            android:textSize="22sp"
+            android:textColor="#FFFFFF"
+            android:padding="12dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <TextView
             android:id="@+id/tvTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="定时曲线"
+            android:text="路灯模式"
             android:textSize="18sp"
             android:textStyle="bold"
-            android:textColor="#333333"
-            android:gravity="center"/>
+            android:textColor="#FFFFFF"
+            android:gravity="center" />
 
         <View
             android:layout_width="48dp"
-            android:layout_height="48dp"/>
+            android:layout_height="48dp" />
 
     </LinearLayout>
 
-    <!-- 操作按钮栏（置顶） -->
+    <!-- 操作按钮栏 -->
     <androidx.cardview.widget.CardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:elevation="4dp">
+        android:layout_marginBottom="8dp"
+        app:cardCornerRadius="14dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="#FFFFFF">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -58,7 +62,6 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- 启用开关 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -73,16 +76,15 @@
                     android:text="启用定时曲线"
                     android:textSize="16sp"
                     android:textStyle="bold"
-                    android:textColor="#333333"/>
+                    android:textColor="#2D2D2D" />
 
                 <Switch
                     android:id="@+id/switchEnabled"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"/>
+                    android:layout_height="wrap_content" />
 
             </LinearLayout>
 
-            <!-- 保存和下发按钮 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -91,22 +93,24 @@
                 <Button
                     android:id="@+id/btnSave"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="44dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="8dp"
                     android:text="保存应用"
-                    android:backgroundTint="#4CAF50"
-                    android:textColor="@android:color/white"/>
+                    android:backgroundTint="#00897B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp" />
 
                 <Button
                     android:id="@+id/btnSendToDevice"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="44dp"
                     android:layout_weight="1"
                     android:layout_marginStart="8dp"
                     android:text="下发到设备"
                     android:backgroundTint="#FF9800"
-                    android:textColor="@android:color/white"/>
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp" />
 
             </LinearLayout>
 
@@ -131,8 +135,10 @@
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:elevation="4dp">
+                android:layout_marginBottom="12dp"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:cardBackgroundColor="#FFFFFF">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -146,16 +152,16 @@
                         android:text="亮度曲线"
                         android:textSize="16sp"
                         android:textStyle="bold"
-                        android:textColor="#333333"
-                        android:layout_marginBottom="8dp"/>
+                        android:textColor="#2D2D2D"
+                        android:layout_marginBottom="4dp" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="拖动或点击控制点调整，长按控制点编辑"
                         android:textSize="12sp"
-                        android:textColor="#666666"
-                        android:layout_marginBottom="8dp"/>
+                        android:textColor="#6B7280"
+                        android:layout_marginBottom="12dp" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -166,37 +172,38 @@
                         <Button
                             android:id="@+id/btnAddPoint"
                             android:layout_width="wrap_content"
-                            android:layout_height="36dp"
+                            android:layout_height="38dp"
                             android:text="+ 添加控制点"
                             android:textSize="13sp"
-                            android:backgroundTint="#2196F3"
-                            android:textColor="@android:color/white"
+                            android:backgroundTint="#FF6B35"
+                            android:textColor="#FFFFFF"
                             android:paddingStart="16dp"
                             android:paddingEnd="16dp"
                             android:minWidth="0dp"
-                            android:minHeight="0dp"/>
+                            android:minHeight="0dp" />
 
                         <Button
                             android:id="@+id/btnLoadStreetlight"
                             android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:layout_marginStart="12dp"
+                            android:layout_height="38dp"
+                            android:layout_marginStart="10dp"
                             android:text="加载路灯曲线"
                             android:textSize="13sp"
-                            android:backgroundTint="#FF9800"
-                            android:textColor="@android:color/white"
+                            android:backgroundTint="#1976D2"
+                            android:textColor="#FFFFFF"
                             android:paddingStart="16dp"
                             android:paddingEnd="16dp"
                             android:minWidth="0dp"
-                            android:minHeight="0dp"/>
+                            android:minHeight="0dp" />
 
                     </LinearLayout>
 
                     <com.example.ble_device_mesh.ui.StreetlightCurveView
                         android:id="@+id/curveView"
                         android:layout_width="match_parent"
-                        android:layout_height="300dp"
-                        android:background="@android:color/white"/>
+                        android:layout_height="260dp"
+                        android:background="#FFFFFF"
+                        android:elevation="1dp" />
 
                     <TextView
                         android:id="@+id/tvStatus"
@@ -205,19 +212,21 @@
                         android:layout_marginTop="12dp"
                         android:text="未设置"
                         android:textSize="14sp"
-                        android:textColor="#666666"
-                        android:gravity="center"/>
+                        android:textColor="#6B7280"
+                        android:gravity="center" />
 
                 </LinearLayout>
 
             </androidx.cardview.widget.CardView>
 
-            <!-- 控制点列表卡片（放到底部） -->
+            <!-- 控制点列表卡片 -->
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:elevation="4dp">
+                android:layout_marginBottom="12dp"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:cardBackgroundColor="#FFFFFF">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -231,14 +240,14 @@
                         android:text="控制点列表"
                         android:textSize="16sp"
                         android:textStyle="bold"
-                        android:textColor="#333333"
-                        android:layout_marginBottom="8dp"/>
+                        android:textColor="#2D2D2D"
+                        android:layout_marginBottom="8dp" />
 
                     <androidx.recyclerview.widget.RecyclerView
                         android:id="@+id/recyclerPoints"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:nestedScrollingEnabled="false"/>
+                        android:nestedScrollingEnabled="false" />
 
                 </LinearLayout>
 
@@ -248,10 +257,11 @@
             <Button
                 android:id="@+id/btnResetDefault"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="44dp"
                 android:text="恢复默认配置"
                 android:backgroundTint="#9E9E9E"
-                android:textColor="@android:color/white"/>
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
 
         </LinearLayout>
 

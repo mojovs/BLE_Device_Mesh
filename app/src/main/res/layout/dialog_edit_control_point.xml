@@ -3,32 +3,32 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="20dp">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="时间"
-        android:textSize="14sp"
+        android:textSize="15sp"
         android:textStyle="bold"
-        android:textColor="#333333"
-        android:layout_marginBottom="8dp"/>
+        android:textColor="#1C1B1F"
+        android:layout_marginBottom="10dp" />
 
     <TimePicker
         android:id="@+id/timePicker"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:timePickerMode="spinner"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="16dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="亮度"
-        android:textSize="14sp"
+        android:textSize="15sp"
         android:textStyle="bold"
-        android:textColor="#333333"
-        android:layout_marginBottom="8dp"/>
+        android:textColor="#1C1B1F"
+        android:layout_marginBottom="10dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -42,16 +42,17 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:max="100"
-            android:progress="50"/>
+            android:progress="50" />
 
         <TextView
             android:id="@+id/tvBrightnessValue"
             android:layout_width="50dp"
             android:layout_height="wrap_content"
             android:text="50%"
-            android:textSize="14sp"
-            android:textColor="#333333"
-            android:gravity="end"/>
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="#FFB300"
+            android:gravity="end" />
 
     </LinearLayout>
 
