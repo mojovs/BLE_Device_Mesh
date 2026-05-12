@@ -17,7 +17,8 @@ data class MeshDevice(
     var deviceTime: Long? = null,  // 设备时间（Unix 时间戳，秒）
     var lightLevel: Float? = null,  // 当前光照度（lux）
     var isOnline: Boolean = false,  // 是否在线
-    val addedTime: Long = System.currentTimeMillis()  // 添加时间
+    val addedTime: Long = System.currentTimeMillis(),  // 添加时间
+    var sortOrder: Int = 0  // 排序序号，用于自定义排列
 ) : Parcelable
 
 enum class DeviceType {

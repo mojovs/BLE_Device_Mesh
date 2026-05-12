@@ -10,6 +10,7 @@ import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.viewModels
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
@@ -58,10 +59,45 @@ class MainActivity : ComponentActivity() {
             mutableListOf(),
             onDeviceClick = { device ->
                 openDeviceDetail(device)
+            },
+            onBrightnessChange = { device, progress ->
+                val targetAddress = device.groupAddress ?: device.address
+                viewModel.sendBrightness(targetAddress, progress)
             }
         )
         rvDevices.layoutManager = GridLayoutManager(this, 2)
         rvDevices.adapter = deviceAdapter
+
+        // 长按拖拽排序
+        val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.Callback() {
+            override fun getMovementFlags(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int {
+                val dragFlags = ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                        ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+                return makeMovementFlags(dragFlags, 0)
+            }
+
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                val from = viewHolder.adapterPosition
+                val to = target.adapterPosition
+                deviceAdapter.swapItems(from, to)
+                return true
+            }
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
+
+            override fun isLongPressDragEnabled() = true
+
+            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(recyclerView, viewHolder)
+                // 拖拽结束，保存最终顺序
+                val reordered = deviceAdapter.getDevices()
+                reordered.forEachIndexed { index, device ->
+                    device.sortOrder = index
+                }
+                deviceRepository.reorderDevices(reordered)
+            }
+        })
+        itemTouchHelper.attachToRecyclerView(rvDevices)
 
         // 配网设备按钮
         btnAddDevice.text = "配网设备"

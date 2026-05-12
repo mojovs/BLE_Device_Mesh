@@ -4,6 +4,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.GroupRepository
@@ -11,16 +12,25 @@ import com.example.ble_device_mesh.data.MeshDevice
 
 class MeshDeviceAdapter(
     private var devices: MutableList<MeshDevice>,
-    private val onDeviceClick: (MeshDevice) -> Unit
+    private val onDeviceClick: (MeshDevice) -> Unit,
+    private val onBrightnessChange: (MeshDevice, Int) -> Unit = { _, _ -> }
 ) : RecyclerView.Adapter<MeshDeviceAdapter.ViewHolder>() {
+
+    fun swapItems(from: Int, to: Int) {
+        val item = devices.removeAt(from)
+        devices.add(to, item)
+        notifyItemMoved(from, to)
+    }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val ivDeviceIcon: ImageView = view.findViewById(R.id.ivDeviceIcon)
         val layoutOnlineIndicator: View = view.findViewById(R.id.layoutOnlineIndicator)
         val tvDeviceName: TextView = view.findViewById(R.id.tvDeviceName)
         val tvDeviceGroup: TextView = view.findViewById(R.id.tvDeviceGroup)
+        val seekBarBrightness: SeekBar = view.findViewById(R.id.seekBarQuickBrightness)
         val tvBrightness: TextView = view.findViewById(R.id.tvBrightness)
         val tvTemperature: TextView = view.findViewById(R.id.tvTemperature)
+        val tvCardTemperature: TextView = view.findViewById(R.id.tvCardTemperature)
         val tvLightStatus: TextView = view.findViewById(R.id.tvLightStatus)
         val tvScheduleStatus: TextView = view.findViewById(R.id.tvScheduleStatus)
     }
@@ -42,8 +52,42 @@ class MeshDeviceAdapter(
         holder.tvDeviceName.text = device.name
         holder.tvBrightness.text = "${savedBrightness}%"
 
-        holder.tvTemperature.visibility = if (device.temperature != null) View.VISIBLE else View.GONE
-        device.temperature?.let { holder.tvTemperature.text = "${String.format("%.1f", it)}°C" }
+        // 亮度滑条控制
+        holder.seekBarBrightness.progress = savedBrightness
+        holder.seekBarBrightness.setOnSeekBarChangeListener(null) // 避免复用错乱
+        holder.seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    holder.tvBrightness.text = "$progress%"
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val progress = seekBar?.progress ?: return
+                prefs.edit().putInt("brightness_0x${device.address.toString(16)}", progress).apply()
+                onBrightnessChange(device, progress)
+            }
+        })
+
+        // 底部温度显示（替换原分组按钮）
+        holder.tvCardTemperature.visibility = View.VISIBLE
+        val temp = device.temperature
+        if (temp != null) {
+            holder.tvCardTemperature.text = "${String.format("%.1f", temp)} °C"
+            holder.tvCardTemperature.setTextColor(
+                when {
+                    temp > 30f -> android.graphics.Color.parseColor("#FF3B30")     // 红色
+                    temp > 20f -> android.graphics.Color.parseColor("#8BC34A")     // 草绿色
+                    temp > 10f -> android.graphics.Color.parseColor("#FFD600")     // 荧黄色
+                    else       -> android.graphics.Color.parseColor("#4FC3F7")     // 冰色
+                }
+            )
+        } else {
+            holder.tvCardTemperature.text = "-- °C"
+            holder.tvCardTemperature.setTextColor(android.graphics.Color.parseColor("#6B7280"))
+        }
 
         // 在线状态指示
         holder.layoutOnlineIndicator.visibility = if (device.isOnline) View.VISIBLE else View.GONE
@@ -71,6 +115,8 @@ class MeshDeviceAdapter(
     }
 
     override fun getItemCount() = devices.size
+
+    fun getDevices(): MutableList<MeshDevice> = devices
 
     fun updateDevices(newDevices: List<MeshDevice>) {
         devices = newDevices.toMutableList()

@@ -167,15 +167,15 @@
                 android:background="#E5E7EB" />
 
             <TextView
-                android:id="@+id/btnQuickGroup"
+                android:id="@+id/tvCardTemperature"
                 android:layout_width="0dp"
                 android:layout_height="28dp"
                 android:layout_weight="1"
                 android:gravity="center"
-                android:text="🔗 分组"
-                android:textSize="10sp"
+                android:text="-- °C"
+                android:textSize="11sp"
                 android:textColor="#6B7280"
-                android:background="?android:attr/selectableItemBackgroundBorderless" />
+                android:visibility="gone" />
 
         </LinearLayout>
 

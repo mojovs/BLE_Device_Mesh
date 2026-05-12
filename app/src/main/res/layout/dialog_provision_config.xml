@@ -54,6 +54,21 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="设备类型"
+        android:textSize="13sp"
+        android:textColor="#6B7280"
+        android:layout_marginBottom="6dp" />
+
+    <Spinner
+        android:id="@+id/spinnerDeviceType"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="绑定 AppKey"
         android:textSize="13sp"
         android:textColor="#6B7280"

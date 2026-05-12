@@ -742,6 +742,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 rediscoveryHandled = true
 
                 Log.d("MeshApp", "已使用 Proxy Service，读取设备信息（跳过自动绑定）")
+                MeshState.configState = CONFIG_IDLE
                 MeshState.isConnected.postValue(true)
                 MeshState.connectedDeviceAddress.postValue(device.address)
                 MeshState.provisioningStatus.postValue("正在读取设备信息...")
@@ -812,6 +813,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 }
 
                 Log.d("MeshApp", "重连成功，已使用 Proxy Service")
+                MeshState.configState = CONFIG_IDLE
                 MeshState.isConnected.postValue(true)
                 MeshState.connectedDeviceAddress.postValue(device.address)
                 MeshState.provisioningStatus.postValue("正在读取设备信息...")

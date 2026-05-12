@@ -14,11 +14,12 @@ class DeviceRepository(context: Context) {
         private const val KEY_DEVICES = "devices"
     }
     
-    // 获取所有设备
+    // 获取所有设备，按排序序号排列
     fun getAllDevices(): List<MeshDevice> {
         val json = prefs.getString(KEY_DEVICES, null) ?: return emptyList()
         val type = object : TypeToken<List<MeshDevice>>() {}.type
-        return gson.fromJson(json, type)
+        val devices: List<MeshDevice> = gson.fromJson(json, type)
+        return devices.sortedBy { it.sortOrder }
     }
     
     // 保存设备列表
@@ -34,7 +35,8 @@ class DeviceRepository(context: Context) {
         if (devices.any { it.id == device.id }) {
             return
         }
-        devices.add(device)
+        val maxOrder = devices.maxOfOrNull { it.sortOrder } ?: 0
+        devices.add(device.copy(sortOrder = maxOrder + 1))
         saveDevices(devices)
     }
     
