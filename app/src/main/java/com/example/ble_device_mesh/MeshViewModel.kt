@@ -1606,10 +1606,14 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         
         MeshState.bleScanner.startScan(object : BleScannerManager.ScanListener {
             override fun onDeviceFound(device: ScanResult) {
-                val currentList = MeshState.scannedDevices.value ?: emptyList()
-                if (currentList.none { it.device.address == device.device.address }) {
-                    MeshState.scannedDevices.postValue(currentList + device)
+                val currentList = MeshState.scannedDevices.value?.toMutableList() ?: mutableListOf()
+                val existingIndex = currentList.indexOfFirst { it.device.address == device.device.address }
+                if (existingIndex >= 0) {
+                    currentList[existingIndex] = device  // 更新 RSSI
+                } else {
+                    currentList.add(device)
                 }
+                MeshState.scannedDevices.postValue(currentList)
             }
             override fun onScanFailed(errorCode: Int) {
                 MeshState.isScanning.postValue(false)
@@ -1622,6 +1626,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         MeshState.bleScanner.stopScan()
         MeshState.isScanning.postValue(false)
         MeshState.statusText.postValue("扫描已停止")
+    }
+
+    fun clearScannedDevices() {
+        MeshState.scannedDevices.setValue(emptyList())
     }
     
     fun autoConnectToProxy() {
@@ -1732,6 +1740,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
     
     private fun startRssiUpdates() {
+        // 清除旧的轮询，避免重复
+        rssiUpdateHandler?.removeCallbacks(rssiUpdateRunnable)
         rssiUpdateHandler = android.os.Handler(android.os.Looper.getMainLooper())
         rssiUpdateHandler?.post(rssiUpdateRunnable)
     }
@@ -1740,6 +1750,15 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         rssiUpdateHandler?.removeCallbacks(rssiUpdateRunnable)
         rssiUpdateHandler = null
         MeshState.currentRssi.postValue(-999)
+    }
+
+    /**
+     * 确保 RSSI 轮询正在运行（可在 Activity 重入时调用）
+     */
+    fun ensureRssiUpdates() {
+        if (MeshState.isConnected.value == true) {
+            startRssiUpdates()
+        }
     }
 
     fun disconnectDevice() {
@@ -2056,6 +2075,115 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         })
     }
     
+    /**
+     * 按优先级顺序尝试连接一组 MAC 地址：
+     * 先试 targetMac，再试 groupMacs，最后试 allOtherMacs
+     */
+    fun connectToDeviceList(
+        targetMac: String?,
+        groupMacs: List<String>,
+        allOtherMacs: List<String>,
+        onConnected: (String) -> Unit = {},
+        onAllFailed: () -> Unit = {}
+    ) {
+        // 构建优先级列表：目标 → 同组 → 其他
+        val priorityList = mutableListOf<String>()
+        if (targetMac != null) {
+            priorityList.add(targetMac)
+        }
+        // 同组设备（去重，排除目标）
+        for (mac in groupMacs) {
+            if (mac != targetMac && mac !in priorityList) {
+                priorityList.add(mac)
+            }
+        }
+        // 其他已配网设备（去重）
+        for (mac in allOtherMacs) {
+            if (mac !in priorityList) {
+                priorityList.add(mac)
+            }
+        }
+
+        if (priorityList.isEmpty()) {
+            MeshState.statusText.postValue("没有可连接的设备")
+            onAllFailed()
+            return
+        }
+
+        MeshState.statusText.postValue("正在尝试连接 ${priorityList.size} 个设备...")
+        tryConnectNextInList(priorityList, 0, onConnected, onAllFailed)
+    }
+
+    private fun tryConnectNextInList(
+        addresses: List<String>,
+        index: Int,
+        onConnected: (String) -> Unit,
+        onAllFailed: () -> Unit
+    ) {
+        if (index >= addresses.size) {
+            MeshState.statusText.postValue("所有设备均无法连接")
+            onAllFailed()
+            return
+        }
+
+        val address = addresses[index]
+        MeshState.statusText.postValue("连接 $address (${index + 1}/${addresses.size})...")
+
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val timeoutRunnable = Runnable {
+            MeshState.statusText.postValue("连接 $address 超时")
+            handler.postDelayed({
+                tryConnectNextInList(addresses, index + 1, onConnected, onAllFailed)
+            }, 500)
+        }
+        handler.postDelayed(timeoutRunnable, 5000)
+
+        MeshState.bleConnection.connect(address, object : BleConnectionManager.ConnectionListener {
+            override fun onConnected() {
+                MeshState.statusText.postValue("设备已连接，正在发现服务...")
+            }
+
+            override fun onDisconnected() {
+                handler.removeCallbacks(timeoutRunnable)
+                MeshState.isConnected.postValue(false)
+                MeshState.connectedDeviceAddress.postValue(null)
+            }
+
+            override fun onServicesDiscovered() {
+                handler.removeCallbacks(timeoutRunnable)
+                MeshState.isConnected.postValue(true)
+                MeshState.connectedDeviceAddress.postValue(address)
+                MeshState.statusText.postValue("已连接到 $address")
+                saveProxyAddress(address)
+                startRssiUpdates()
+                onConnected(address)
+            }
+
+            override fun onDataReceived(data: ByteArray) {
+                val mtu = MeshState.bleConnection.mtuSize
+                MeshState.meshManagerApi.handleNotifications(mtu, data)
+            }
+
+            override fun onDataSent(data: ByteArray) {
+                val mtu = MeshState.bleConnection.mtuSize
+                MeshState.meshManagerApi.handleWriteCallbacks(mtu, data)
+            }
+
+            override fun onMeshMessageReceived(src: Int, data: ByteArray) {}
+
+            override fun onRssiRead(rssi: Int) {
+                MeshState.currentRssi.postValue(rssi)
+            }
+
+            override fun onError(error: String) {
+                handler.removeCallbacks(timeoutRunnable)
+                handler.postDelayed({
+                    tryConnectNextInList(addresses, index + 1, onConnected, onAllFailed)
+                }, 1000)
+            }
+        })
+    }
+
     private fun getSavedProxyAddress(): String? {
         val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
         return prefs.getString("last_proxy_address", null)

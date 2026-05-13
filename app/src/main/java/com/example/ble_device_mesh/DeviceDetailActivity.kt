@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.lifecycle.Observer
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.AdapterView
@@ -82,46 +83,20 @@ class DeviceDetailActivity : ComponentActivity() {
         
         setupViews()
         observeViewModel()
-        
-        
-        // 检查当前连接的蓝牙设备，如果不是当前设备则切换
-        connectToTargetDevice()
+
+        // 进入页面自动开始连接
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            startAutoConnect()
+        }, 500)
     }
 
-    /**
-     * 检查并连接到目标设备：如果已连接到其他设备则先断开再连接
-     */
-    private fun connectToTargetDevice() {
-        val currentConnectedMac = viewModel.connectedDeviceAddress.value
-        val targetDeviceMac = getDeviceMac(device.address)
+    // 目标设备 MAC（用于连接后持续扫描监测）
+    private val targetDeviceMac by lazy { getDeviceMac(device.address) }
+    private var targetMonitorObserver: Observer<List<ScanResult>>? = null
 
-        if (targetDeviceMac != null) {
-            if (currentConnectedMac == targetDeviceMac) {
-                Log.d("DeviceDetail", "已连接到目标设备: $targetDeviceMac")
-                return
-            }
-            // 连接到错误的设备或未连接
-            if (currentConnectedMac != null) {
-                Log.d("DeviceDetail", "当前连接到 $currentConnectedMac，正在切换到 $targetDeviceMac")
-                viewModel.disconnectDevice()
-                // 断开后稍等再连接，避免小米蓝牙栈卡死
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    connectToMac(targetDeviceMac)
-                }, 300)
-            } else {
-                connectToMac(targetDeviceMac)
-            }
-        } else if (viewModel.hasSavedProxyAddress()) {
-            // 如果没有保存 MAC，尝试上次连接的地址
-            Log.d("DeviceDetail", "未找到目标设备 MAC，尝试上次连接地址")
-            Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
-            viewModel.connectToSavedProxy()
-        }
-    }
-
-    private fun connectToMac(mac: String) {
-        Toast.makeText(this, "正在连接设备 $mac...", Toast.LENGTH_SHORT).show()
-        viewModel.connectToAddress(mac)
+    override fun onDestroy() {
+        super.onDestroy()
+        stopTargetMonitoring()
     }
     
 
@@ -386,27 +361,7 @@ class DeviceDetailActivity : ComponentActivity() {
         
         // 自动连接按钮
         btnAutoConnect.setOnClickListener {
-            if (viewModel.isConnected.value == true) {
-                Toast.makeText(this, "已经连接到设备", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            
-            val history = viewModel.getProxyAddressHistory()
-            if (history.isEmpty()) {
-                Toast.makeText(this, "没有历史连接记录", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            
-            Toast.makeText(this, "开始自动连接，尝试 ${history.size} 个设备...", Toast.LENGTH_SHORT).show()
-            btnAutoConnect.isEnabled = false
-            
-            viewModel.autoConnectFromHistory {
-                // 所有设备都连接失败
-                runOnUiThread {
-                    btnAutoConnect.isEnabled = true
-                    Toast.makeText(this, "所有历史设备均无法连接", Toast.LENGTH_LONG).show()
-                }
-            }
+            startAutoConnect()
         }
         
         // 设备信息
@@ -636,11 +591,10 @@ class DeviceDetailActivity : ComponentActivity() {
                 val name = if (mac != null) viewModel.getDeviceNameForMac(mac) else null
                 tvConnectionStatus.text = if (name != null) "已连接到 $name" else "已连接"
                 tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+                // 先显示"获取中..."，等 RSSI 更新到位后自动刷新
+                tvSignalStrength.text = "📶 获取中..."
+                tvSignalStrength.setTextColor(getColor(android.R.color.darker_gray))
                 tvSignalStrength.visibility = View.VISIBLE
-                // 延迟更新信号强度，等待 RSSI 数据准备好
-                tvSignalStrength.postDelayed({
-                    updateSignalStrength(tvSignalStrength)
-                }, 500)
                 btnConnect.text = "断开"
                 btnConnect.visibility = View.VISIBLE
                 btnAutoConnect.visibility = View.GONE
@@ -756,8 +710,9 @@ class DeviceDetailActivity : ComponentActivity() {
         if (viewModel.isConnected.value == true) {
             tvConnectionStatus.text = "已连接"
             tvConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+            tvSignalStrength.text = "📶 获取中..."
+            tvSignalStrength.setTextColor(getColor(android.R.color.darker_gray))
             tvSignalStrength.visibility = View.VISIBLE
-            updateSignalStrength(tvSignalStrength)
             btnConnect.text = "断开"
             btnConnect.visibility = View.VISIBLE
             findViewById<Button>(R.id.btnAutoConnect).visibility = View.GONE
@@ -772,6 +727,9 @@ class DeviceDetailActivity : ComponentActivity() {
     }
     
     private fun observeViewModel() {
+        // 确保 RSSI 轮询已启动（处理重入场景）
+        viewModel.ensureRssiUpdates()
+
         // 观察 RSSI 变化
         viewModel.getCurrentRssi().observe(this) { rssi ->
             val tvSignalStrength = findViewById<TextView>(R.id.tvSignalStrength)
@@ -1080,15 +1038,21 @@ class DeviceDetailActivity : ComponentActivity() {
         // 重置标志，因为 setAdapter 会触发 onItemSelected
         isInitialSelection = true
     }
-    
-    private fun saveDeviceMac(deviceAddress: Int, macAddress: String) {
-        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
-        prefs.edit().putString("device_mac_0x${deviceAddress.toString(16)}", macAddress).apply()
-    }
-    
+
     private fun getDeviceMac(deviceAddress: Int): String? {
+        // 从 DeviceRepository 查找该地址对应的 bluetoothMac
+        val repoDevice = deviceRepository.getAllDevices().find { it.address == deviceAddress }
+        if (repoDevice?.bluetoothMac != null) return repoDevice.bluetoothMac
+        // 回退到旧的 SharedPreferences
         val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
         return prefs.getString("device_mac_0x${deviceAddress.toString(16)}", null)
+    }
+
+    private fun saveDeviceMac(deviceAddress: Int, macAddress: String) {
+        device.bluetoothMac = macAddress
+        deviceRepository.updateDevice(device)
+        val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString("device_mac_0x${deviceAddress.toString(16)}", macAddress).apply()
     }
     
     private fun showProxyConnectionDialog() {
@@ -1343,5 +1307,144 @@ class DeviceDetailActivity : ComponentActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 构建 MAC 优先级列表：目标设备 → 同组设备 → 所有其他已配网设备
+     */
+    private fun buildPriorityMacList(): Triple<String?, List<String>, List<String>> {
+        val targetMac = getDeviceMac(device.address)
+
+        val groupMacs = mutableListOf<String>()
+        val groupIds = device.groupIds
+        if (groupIds != null) {
+            val memberIds = groupIds.flatMap { gid ->
+                groupRepository.getGroupById(gid)?.memberDeviceIds ?: emptyList()
+            }.toSet()
+            for (d in deviceRepository.getAllDevices()) {
+                if (d.id in memberIds && d.id != device.id) {
+                    val mac = getDeviceMac(d.address)
+                    if (mac != null && mac !in groupMacs) groupMacs.add(mac)
+                }
+            }
+        }
+
+        val allOtherMacs = deviceRepository.getAllDevices()
+            .filter { it.id != device.id }
+            .mapNotNull { getDeviceMac(it.address) }
+            .filter { it != targetMac && it !in groupMacs }
+            .distinct()
+
+        return Triple(targetMac, groupMacs, allOtherMacs)
+    }
+
+    /**
+     * 自动连接：使用 MAC 优先级列表，依次尝试连接
+     */
+    private var isAutoConnecting = false
+
+    private fun startAutoConnect() {
+        if (isAutoConnecting) return
+
+        // 如果已连接，检查是否就是目标设备
+        val currentConnected = viewModel.connectedDeviceAddress.value
+        val targetMac = getDeviceMac(device.address)
+        if (currentConnected != null) {
+            if (targetMac != null && currentConnected.equals(targetMac, ignoreCase = true)) {
+                Toast.makeText(this, "已经连接到目标设备", Toast.LENGTH_SHORT).show()
+                return
+            }
+            // 连接着其他设备，先断开
+            Log.d("DeviceDetail", "当前连接 $currentConnected，断开后切换到目标列表")
+            isAutoConnecting = true
+            viewModel.disconnectDevice()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                doAutoConnect()
+            }, 500)
+            return
+        }
+
+        doAutoConnect()
+    }
+
+    private fun doAutoConnect() {
+        isAutoConnecting = true
+
+        val (targetMac, groupMacs, allOtherMacs) = buildPriorityMacList()
+        val totalCount = (if (targetMac != null) 1 else 0) + groupMacs.size + allOtherMacs.size
+
+        if (totalCount == 0) {
+            Toast.makeText(this, "没有已配网设备的 MAC 地址", Toast.LENGTH_LONG).show()
+            isAutoConnecting = false
+            return
+        }
+
+        val btnAutoConnect = findViewById<Button>(R.id.btnAutoConnect)
+        btnAutoConnect.isEnabled = false
+
+        viewModel.connectToDeviceList(
+            targetMac = targetMac,
+            groupMacs = groupMacs,
+            allOtherMacs = allOtherMacs,
+            onConnected = { mac ->
+                runOnUiThread {
+                    isAutoConnecting = false
+                    Log.d("DeviceDetail", "已连接到 $mac，开始监测目标设备 $targetMac")
+                    startTargetMonitoring()
+                }
+            },
+            onAllFailed = {
+                runOnUiThread {
+                    isAutoConnecting = false
+                    btnAutoConnect.isEnabled = true
+                    Toast.makeText(this, "所有设备均无法连接", Toast.LENGTH_LONG).show()
+                }
+            }
+        )
+    }
+
+    /**
+     * 连接成功后开启 BLE 扫描，监测目标设备是否出现。
+     * 一旦扫描到目标设备 MAC，自动切换连接过去。
+     */
+    private fun startTargetMonitoring() {
+        val mac = targetDeviceMac ?: return
+
+        stopTargetMonitoring()
+
+        viewModel.startBleScan()
+        Log.d("DeviceDetail", "启动目标监测扫描: $mac")
+
+        targetMonitorObserver = Observer { devices ->
+            val found = devices.any { it.device.address.equals(mac, ignoreCase = true) }
+            if (!found) return@Observer
+
+            // 目标设备出现了！
+            Log.d("DeviceDetail", "监测到目标设备 $mac，正在切换...")
+            stopTargetMonitoring()
+
+            val currentConnected = viewModel.connectedDeviceAddress.value
+            if (currentConnected != null && currentConnected.equals(mac, ignoreCase = true)) {
+                return@Observer // 已经连着目标
+            }
+
+            if (currentConnected != null) {
+                viewModel.disconnectDevice()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    viewModel.connectToAddress(mac)
+                }, 500)
+            } else {
+                viewModel.connectToAddress(mac)
+            }
+        }
+        viewModel.scannedDevices.observe(this, targetMonitorObserver!!)
+    }
+
+    private fun stopTargetMonitoring() {
+        if (targetMonitorObserver != null) {
+            viewModel.scannedDevices.removeObserver(targetMonitorObserver!!)
+            targetMonitorObserver = null
+        }
+        viewModel.stopBleScan()
     }
 }
