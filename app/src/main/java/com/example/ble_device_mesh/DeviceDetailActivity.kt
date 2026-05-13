@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.AdapterView
@@ -83,18 +84,45 @@ class DeviceDetailActivity : ComponentActivity() {
         observeViewModel()
         
         
-        // 优先连接该设备的 MAC 地址
-        if (viewModel.isConnected.value != true) {
-            val deviceMac = getDeviceMac(device.address)
-            if (deviceMac != null) {
-                Toast.makeText(this, "正在连接设备 $deviceMac...", Toast.LENGTH_SHORT).show()
-                viewModel.connectToAddress(deviceMac)
-            } else if (viewModel.hasSavedProxyAddress()) {
-                // 如果设备没有保存 MAC，再尝试上次连接的地址
-                Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
-                viewModel.connectToSavedProxy()
+        // 检查当前连接的蓝牙设备，如果不是当前设备则切换
+        connectToTargetDevice()
+    }
+
+    /**
+     * 检查并连接到目标设备：如果已连接到其他设备则先断开再连接
+     */
+    private fun connectToTargetDevice() {
+        val currentConnectedMac = viewModel.connectedDeviceAddress.value
+        val targetDeviceMac = getDeviceMac(device.address)
+
+        if (targetDeviceMac != null) {
+            if (currentConnectedMac == targetDeviceMac) {
+                Log.d("DeviceDetail", "已连接到目标设备: $targetDeviceMac")
+                return
             }
-        }    }
+            // 连接到错误的设备或未连接
+            if (currentConnectedMac != null) {
+                Log.d("DeviceDetail", "当前连接到 $currentConnectedMac，正在切换到 $targetDeviceMac")
+                viewModel.disconnectDevice()
+                // 断开后稍等再连接，避免小米蓝牙栈卡死
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    connectToMac(targetDeviceMac)
+                }, 300)
+            } else {
+                connectToMac(targetDeviceMac)
+            }
+        } else if (viewModel.hasSavedProxyAddress()) {
+            // 如果没有保存 MAC，尝试上次连接的地址
+            Log.d("DeviceDetail", "未找到目标设备 MAC，尝试上次连接地址")
+            Toast.makeText(this, "正在自动连接上次设备...", Toast.LENGTH_SHORT).show()
+            viewModel.connectToSavedProxy()
+        }
+    }
+
+    private fun connectToMac(mac: String) {
+        Toast.makeText(this, "正在连接设备 $mac...", Toast.LENGTH_SHORT).show()
+        viewModel.connectToAddress(mac)
+    }
     
 
     private fun setupCollapsible(headerId: Int, bodyId: Int, iconId: Int, expanded: Boolean = true) {
@@ -117,6 +145,7 @@ class DeviceDetailActivity : ComponentActivity() {
         setupCollapsible(R.id.headerTemperature, R.id.bodyTemperature, R.id.iconTemperature, false)
         setupCollapsible(R.id.headerLightLevel, R.id.bodyLightLevel, R.id.iconLightLevel, false)
         setupCollapsible(R.id.headerTime, R.id.bodyTime, R.id.iconTime, false)
+        setupCollapsible(R.id.headerAutoLight, R.id.bodyAutoLight, R.id.iconAutoLight, false)
 
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
         val btnBack = findViewById<TextView>(R.id.btnBack)
@@ -691,6 +720,7 @@ class DeviceDetailActivity : ComponentActivity() {
         // 定时开关（仅灯光设备）
         if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
             setupScheduleCard()
+            setupAutoLightCard()
 
             // 添加定时任务管理按钮
             val btnSchedulerManager = findViewById<Button>(R.id.btnSchedulerManager)
@@ -830,6 +860,127 @@ class DeviceDetailActivity : ComponentActivity() {
                 Toast.makeText(this, "计划 #$index: $timeStr ($repeatStr) - ${if (actionType == 1) "开灯" else "关灯"}", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    /**
+     * 设置光敏模式卡片
+     * 使用标准模型 Generic OnOff (Element 1) + Generic Level (Element 1)
+     */
+    private fun setupAutoLightCard() {
+        val cardAutoLight = findViewById<androidx.cardview.widget.CardView>(R.id.cardAutoLight)
+        cardAutoLight.visibility = View.VISIBLE
+
+        val switchAutoLight = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)
+        val seekBarThreshold = findViewById<SeekBar>(R.id.seekBarAutoLightThreshold)
+        val tvThreshold = findViewById<TextView>(R.id.tvAutoLightThreshold)
+        val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarAutoLightBrightness)
+        val tvBrightness = findViewById<TextView>(R.id.tvAutoLightBrightness)
+        val tvState = findViewById<TextView>(R.id.tvAutoLightState)
+        val btnRead = findViewById<Button>(R.id.btnReadAutoLight)
+
+        // 光敏模式 Element 地址
+        val elem1Addr = device.address + 1  // OnOff + Level(阈值)
+        val elem2Addr = device.address + 2  // Level(亮度)
+
+        // 默认状态
+        switchAutoLight.isChecked = false
+        seekBarThreshold.progress = 50
+        tvThreshold.text = "50%"
+        seekBarBrightness.progress = 100
+        tvBrightness.text = "100%"
+        tvState.text = "--"
+
+        // 阈值滑块
+        seekBarThreshold.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvThreshold.text = "$progress%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (switchAutoLight.isChecked && viewModel.isConnected.value == true) {
+                    sendAutoLightConfig()
+                }
+            }
+        })
+
+        // 开灯亮度滑块
+        seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val display = if (progress == 0) 1 else progress  // 至少 1%
+                tvBrightness.text = "$display%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val brightness = if (seekBarBrightness.progress < 1) 1 else seekBarBrightness.progress
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendAutoLightBrightness(elem2Addr, brightness)
+                }
+            }
+        })
+
+        // 开关切换
+        switchAutoLight.setOnCheckedChangeListener { _, isChecked ->
+            if (viewModel.isConnected.value == true) {
+                sendAutoLightConfig()
+            }
+        }
+
+        // 读取状态按钮
+        btnRead.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.readAutoLightMode(elem1Addr)
+                Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 观察光敏模式状态（从 GenericOnOffStatus + GenericLevelStatus 合并更新）
+        viewModel.getAutoLightStatus().observe(this) { (src, enabled, threshold) ->
+            if (src == elem1Addr || src == device.address) {
+                switchAutoLight.isChecked = enabled == 1
+                seekBarThreshold.progress = threshold
+                tvThreshold.text = "$threshold%"
+                Log.d("DeviceDetail", "光敏模式状态已更新: enabled=$enabled, threshold=$threshold%")
+            }
+        }
+
+        // 观察使能状态
+        viewModel.getAutoLightEnabled().observe(this) { (src, enabled) ->
+            if (src == elem1Addr) {
+                switchAutoLight.isChecked = enabled == 1
+            }
+        }
+
+        // 观察开灯亮度
+        viewModel.getAutoLightBrightness().observe(this) { (src, brightness) ->
+            if (src == elem2Addr) {
+                val bri = brightness.coerceIn(1, 100)
+                seekBarBrightness.progress = bri
+                tvBrightness.text = "$bri%"
+            }
+        }
+
+        // 连接状态改变时更新按钮启用
+        viewModel.isConnected.observe(this) { connected ->
+            btnRead.isEnabled = connected
+            switchAutoLight.isEnabled = connected
+            seekBarThreshold.isEnabled = connected
+            seekBarBrightness.isEnabled = connected
+        }
+    }
+
+    /**
+     * 发送光敏模式配置
+     * 光敏模式在 Element 1 上（地址 = 主地址 + 1）
+     */
+    private fun sendAutoLightConfig() {
+        val switchAutoLight = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)
+        val seekBarThreshold = findViewById<SeekBar>(R.id.seekBarAutoLightThreshold)
+        val enable = if (switchAutoLight.isChecked) 1 else 0
+        val threshold = seekBarThreshold.progress
+        // 光敏模式使用 Element 1 地址
+        viewModel.sendAutoLightMode(device.address + 1, enable, threshold)
     }
 
     /**
@@ -984,8 +1135,14 @@ class DeviceDetailActivity : ComponentActivity() {
             Log.d("DeviceDetailActivity", "蓝牙未开启")
             return
         }
-        
-        Log.d("DeviceDetailActivity", "权限和蓝牙检查通过，显示扫描对话框")
+
+        // 检查定位（GPS）
+        if (!checkLocationEnabled()) {
+            Log.d("DeviceDetailActivity", "定位未开启")
+            return
+        }
+
+        Log.d("DeviceDetailActivity", "权限、蓝牙、定位检查通过，显示扫描对话框")
         
         val dialogView = LayoutInflater.from(this).inflate(R.layout.item_device, null)
         val rvProxyDevices = RecyclerView(this).apply {
@@ -1078,10 +1235,38 @@ class DeviceDetailActivity : ComponentActivity() {
             Toast.makeText(this, "请先开启蓝牙", Toast.LENGTH_SHORT).show()
             return false
         }
-        
+
         return true
     }
-    
+
+    /**
+     * 检查手机定位（GPS）是否开启
+     * BLE 扫描需要定位服务开启才能发现设备
+     */
+    private fun checkLocationEnabled(): Boolean {
+        val locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        val isLocationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            locationManager.isLocationEnabled
+        } else {
+            @Suppress("DEPRECATION")
+            locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+            @Suppress("DEPRECATION")
+            locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+        }
+        if (!isLocationEnabled) {
+            AlertDialog.Builder(this)
+                .setTitle("需要开启定位")
+                .setMessage("BLE 扫描需要开启手机定位(GPS)功能才能发现设备。\n\n是否前往设置开启？")
+                .setPositiveButton("去设置") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return false
+        }
+        return true
+    }
+
     private fun saveBrightness(address: Int, brightness: Int) {
         val prefs = getSharedPreferences("DevicePrefs", android.content.Context.MODE_PRIVATE)
         prefs.edit().putInt("brightness_0x${address.toString(16)}", brightness).apply()

@@ -18,6 +18,9 @@ import no.nordicsemi.android.mesh.transport.ConfigNetworkTransmitSet
 import no.nordicsemi.android.mesh.transport.ConfigRelaySet
 import no.nordicsemi.android.mesh.transport.ControlMessage
 import no.nordicsemi.android.mesh.transport.GenericLevelSetUnacknowledged
+import no.nordicsemi.android.mesh.transport.GenericOnOffGet
+import no.nordicsemi.android.mesh.transport.GenericOnOffSetUnacknowledged
+import no.nordicsemi.android.mesh.transport.GenericLevelGet
 import no.nordicsemi.android.mesh.transport.MeshMessage
 import no.nordicsemi.android.mesh.transport.SensorGet
 import no.nordicsemi.android.mesh.transport.SensorStatus
@@ -63,6 +66,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val isNetworkLoaded = MutableLiveData<Boolean>(false)
         val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
         val lightLevelUpdates = MutableLiveData<Pair<Int, Float>>()
+        val autoLightStatusUpdates = MutableLiveData<Triple<Int, Int, Int>>() // Triple<src, enabled(0/1), threshold(0-100)>
+        val autoLightEnabledUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)> - derived from GenericOnOffStatus
+        val autoLightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(0-100)>
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
         val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
@@ -89,6 +95,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val provisioningComplete = MutableLiveData<Event<Pair<Boolean, Int>>>()
         
         var meshNetWork: MeshNetwork? = null
+        // 光敏模式使用标准模型（Generic OnOff + Generic Level）
+
         var currentTid = 0
         var connectionRetryCount = 0
         val maxRetries = 3
@@ -344,6 +352,46 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 } else if (meshMessage.opCode == 0x5F) {
                     Log.d("MeshApp", "收到 SchedulerActionStatus (Src: 0x${src.toString(16)})")
                     parseSchedulerActionStatus(src, meshMessage)
+                } else if (meshMessage.opCode == 0x8204) {
+                    // GenericOnOffStatus - 从参数解析 present state
+                    var enabled = 0
+                    try {
+                        val paramsField = meshMessage.javaClass.getDeclaredField("parameters")
+                        paramsField.isAccessible = true
+                        val params = paramsField.get(meshMessage) as? ByteArray
+                        if (params != null && params.isNotEmpty()) {
+                            enabled = if (params[0].toInt() == 1) 1 else 0
+                        }
+                    } catch (e: Exception) {
+                        Log.w("MeshApp", "解析 GenericOnOffStatus parameters 失败: ${e.message}")
+                    }
+                    Log.d("MeshApp", "光敏模式 OnOffStatus(0x8204): enabled=$enabled (src=0x${src.toString(16)})")
+                    MeshState.autoLightEnabledUpdates.postValue(Pair(src, enabled))
+                    // 同时更新合并状态（可能缺 threshold，复用上一次的值）
+                    val lastKnown = MeshState.autoLightStatusUpdates.value
+                    val thr = lastKnown?.third ?: 50
+                    MeshState.autoLightStatusUpdates.postValue(Triple(src, enabled, thr))
+                    MeshState.statusText.postValue("光敏模式: ${if (enabled == 1) "已开启" else "已关闭"}, 阈值=$thr%")
+                } else if (meshMessage.opCode == 0x8208) {
+                    // GenericLevelStatus - 从参数解析 present level (int16 LE)
+                    var level = 50
+                    try {
+                        val paramsField = meshMessage.javaClass.getDeclaredField("parameters")
+                        paramsField.isAccessible = true
+                        val params = paramsField.get(meshMessage) as? ByteArray
+                        if (params != null && params.size >= 2) {
+                            level = ((params[1].toInt() shl 8) or (params[0].toInt() and 0xFF)).coerceIn(0, 100)
+                        }
+                    } catch (e: Exception) {
+                        Log.w("MeshApp", "解析 GenericLevelStatus parameters 失败: ${e.message}")
+                    }
+                    Log.d("MeshApp", "GenericLevelStatus(0x8208): level=$level (src=0x${src.toString(16)})")
+                    // 更新阈值（可能是 Element 1 回复）
+                    val lastKnown = MeshState.autoLightStatusUpdates.value
+                    val en = lastKnown?.second ?: 0
+                    MeshState.autoLightStatusUpdates.postValue(Triple(src, en, level))
+                    // 也更新亮度（可能是 Element 2 回复）
+                    MeshState.autoLightBrightnessUpdates.postValue(Pair(src, level))
                 } else {
                     Log.w("MeshApp", "收到未处理的消息 OpCode: 0x${meshMessage.opCode.toString(16)} (Src: 0x${src.toString(16)})")
                 }
@@ -1208,7 +1256,96 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     // 兼容旧代码，保留readTemperature作为别名
     @Deprecated("使用 readSensors 代替", ReplaceWith("readSensors(address)"))
     fun readTemperature(address: Int) = readSensors(address)
-    
+
+    // ========== 光敏模式 (Auto-Light Vendor Model) ==========
+
+    /**
+     * 发送光敏模式设置
+     * @param enable 0=关闭, 1=开启
+     * @param thresholdPercent 亮度阈值 0-100
+     */
+    fun sendAutoLightMode(elementAddress: Int, enable: Int, thresholdPercent: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        val threshold = thresholdPercent.coerceIn(0, 100)
+        Log.d("MeshApp", "发送光敏模式: enable=$enable, threshold=$threshold% to elem=0x${elementAddress.toString(16)}")
+
+        try {
+            // Generic OnOff Set: 启用/禁用
+            val onOffMsg = GenericOnOffSetUnacknowledged(appKey, enable == 1, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
+            // Generic Level Set: 阈值 0-100
+            val levelMsg = GenericLevelSetUnacknowledged(appKey, threshold, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
+            MeshState.statusText.postValue("光敏模式: ${if (enable == 1) "开启" else "关闭"}, 阈值=$threshold%")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送光敏模式失败: ${e.message}")
+            MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 读取光敏模式状态（所有三个 Element）
+     */
+    fun readAutoLightMode(elementAddr1: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        val elementAddr2 = elementAddr1 + 1  // Element 2 = 主地址 + 2
+        Log.d("MeshApp", "读取光敏模式: Elem1=0x${elementAddr1.toString(16)}, Elem2=0x${elementAddr2.toString(16)}")
+
+        try {
+            val onOffMsg = GenericOnOffGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddr1, onOffMsg)
+            val levelMsg = GenericLevelGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddr1, levelMsg)
+            // 也读取 Element 2 上的亮度值
+            val brightnessMsg = GenericLevelGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddr2, brightnessMsg)
+            MeshState.statusText.postValue("正在读取光敏模式状态...")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "读取光敏模式失败: ${e.message}")
+            MeshState.statusText.postValue("读取失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发送自动开灯亮度（Element 2，地址 = 主地址 + 2）
+     */
+    fun sendAutoLightBrightness(elementAddr2: Int, brightness: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        val bri = brightness.coerceIn(1, 100)
+        Log.d("MeshApp", "发送自动开灯亮度: $bri% to 0x${elementAddr2.toString(16)}")
+
+        try {
+            val msg = GenericLevelSetUnacknowledged(appKey, bri, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddr2, msg)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送开灯亮度失败: ${e.message}")
+        }
+    }
+
     // 读取设备时间
     fun readDeviceTime(address: Int) {
         val network = MeshState.meshNetWork ?: run {
@@ -2477,6 +2614,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     fun getCurrentRssi(): MutableLiveData<Int> = MeshState.currentRssi
+    fun getAutoLightStatus(): MutableLiveData<Triple<Int, Int, Int>> = MeshState.autoLightStatusUpdates
+    fun getAutoLightEnabled(): MutableLiveData<Pair<Int, Int>> = MeshState.autoLightEnabledUpdates
+    fun getAutoLightBrightness(): MutableLiveData<Pair<Int, Int>> = MeshState.autoLightBrightnessUpdates
 
     /**
      * 发送 Node Reset 命令，清除设备的配网信息

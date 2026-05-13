@@ -1,9 +1,11 @@
 package com.example.ble_device_mesh
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -96,7 +98,36 @@ class ProvisionActivity : ComponentActivity() {
     }
 
     private fun startScan() {
+        if (!checkLocationEnabled()) return
         viewModel.startUnprovisionedScan()
+    }
+
+    /**
+     * 检查手机定位（GPS）是否开启
+     * BLE 扫描需要定位服务开启才能发现设备
+     */
+    private fun checkLocationEnabled(): Boolean {
+        val locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        val isLocationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            locationManager.isLocationEnabled
+        } else {
+            @Suppress("DEPRECATION")
+            locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+            @Suppress("DEPRECATION")
+            locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+        }
+        if (!isLocationEnabled) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("需要开启定位")
+                .setMessage("BLE 扫描需要开启手机定位(GPS)功能才能发现设备。\n\n是否前往设置开启？")
+                .setPositiveButton("去设置") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return false
+        }
+        return true
     }
 
     private fun checkAndRequestPermissions() {
