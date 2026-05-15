@@ -1914,7 +1914,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     "address" to device.address,
                     "type" to device.type.name,
                     "brightness" to device.brightness,
-                    "groupAddress" to device.groupAddress
+                    "groupAddress" to device.groupAddress,
+                    "bluetoothMac" to device.bluetoothMac
                 )
             }
             return gson.toJson(wrapper)
@@ -1955,6 +1956,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         val brightness = deviceJson.optInt("brightness", 50)
                         val groupAddress = if (deviceJson.has("groupAddress") && !deviceJson.isNull("groupAddress"))
                             deviceJson.getInt("groupAddress") else null
+                        val bluetoothMac = if (deviceJson.has("bluetoothMac") && !deviceJson.isNull("bluetoothMac"))
+                            deviceJson.getString("bluetoothMac") else null
                         val deviceType = try {
                             DeviceType.valueOf(typeName)
                         } catch (e: Exception) {
@@ -1970,7 +1973,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                             address = address,
                             type = deviceType,
                             brightness = brightness,
-                            groupAddress = groupAddress
+                            groupAddress = groupAddress,
+                            bluetoothMac = bluetoothMac
                         )
                         repo.addDevice(device)
                         Log.d("MeshApp", "已从导入配置恢复设备: $name (0x${address.toString(16)})")
