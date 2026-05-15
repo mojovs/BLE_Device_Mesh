@@ -6,6 +6,7 @@ import android.bluetooth.le.ScanResult
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.MutableLiveData
+import no.nordicsemi.android.mesh.AllocatedUnicastRange
 import no.nordicsemi.android.mesh.MeshManagerApi
 import no.nordicsemi.android.mesh.MeshManagerCallbacks
 import no.nordicsemi.android.mesh.MeshNetwork
@@ -399,19 +400,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 if (network == null) {
                     statusText.postValue("没有发现网络，请导入 nRF Mesh 配置")
                 } else {
-                    // 使用设备唯一地址设置 Provisioner，确保源地址不为 0x0000
-                    val provisionerAddr = network.selectedProvisioner?.provisionerAddress ?: 0
-                    val addr = if (provisionerAddr == 0) {
-                        getOrGenerateDeviceAddress(getApplication())
-                    } else {
-                        provisionerAddr
-                    }
+                    // 始终使用本机唯一 Provisioner 地址，确保不同手机有不同源地址
+                    // 导入后 DB 中存储的是导出手机的原始地址，必须用 SharedPreferences 中的本机地址覆盖
+                    val context = getApplication<Application>()
+                    val addr = getOrGenerateDeviceAddress(context)
                     try {
                         setProvisionerAddressInternal(network, addr)
+                        MeshState.currentProvisionerAddress.postValue(addr)
                     } catch (e: Exception) {
                         Log.w("MeshApp", "设置 Provisioner 地址失败，使用原始地址: $e")
+                        val fallbackAddr = network.selectedProvisioner?.provisionerAddress ?: 0
+                        MeshState.currentProvisionerAddress.postValue(fallbackAddr)
                     }
-                    MeshState.currentProvisionerAddress.postValue(network.selectedProvisioner?.provisionerAddress ?: addr)
                     Log.d("MeshApp", "Provisioner 地址: 0x${addr.toString(16)}")
 
                     // 调试：检查 NetKey 和 AppKey
@@ -1886,7 +1886,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     "name" to device.name,
                     "address" to device.address,
                     "type" to device.type.name,
-                    "brightness" to device.brightness
+                    "brightness" to device.brightness,
+                    "groupAddress" to device.groupAddress
                 )
             }
             return gson.toJson(wrapper)
@@ -1925,6 +1926,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         val address = deviceJson.getInt("address")
                         val typeName = deviceJson.optString("type", "LIGHT")
                         val brightness = deviceJson.optInt("brightness", 50)
+                        val groupAddress = if (deviceJson.has("groupAddress") && !deviceJson.isNull("groupAddress"))
+                            deviceJson.getInt("groupAddress") else null
                         val deviceType = try {
                             DeviceType.valueOf(typeName)
                         } catch (e: Exception) {
@@ -1939,7 +1942,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                             name = name,
                             address = address,
                             type = deviceType,
-                            brightness = brightness
+                            brightness = brightness,
+                            groupAddress = groupAddress
                         )
                         repo.addDevice(device)
                         Log.d("MeshApp", "已从导入配置恢复设备: $name (0x${address.toString(16)})")
@@ -2002,6 +2006,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     private fun setProvisionerAddressInternal(network: MeshNetwork, address: Int) {
         val provisioner = network.selectedProvisioner
+        // 1. 设置 Provisioner 地址（反射）
         val setMethod = try {
             provisioner.javaClass.getDeclaredMethod("setProvisionerAddress", Integer::class.java)
         } catch (e: Exception) {
@@ -2009,6 +2014,19 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
         setMethod.isAccessible = true
         setMethod.invoke(provisioner, address)
+
+        // 2. 同步更新 Nodes 列表中对应 ProvisionedMeshNode 的 unicastAddress
+        val node = network.getNode(provisioner.provisionerUuid)
+        if (node != null) {
+            node.setUnicastAddress(address)
+            Log.d("MeshApp", "已同步 ProvisionedMeshNode 地址: 0x${address.toString(16)}")
+        }
+
+        // 3. 确保地址在 provisioner 的分配范围内
+        val hasRange = provisioner.allocatedUnicastRanges.any { it.isInRange(address) }
+        if (!hasRange) {
+            provisioner.addRange(AllocatedUnicastRange(0x0200, 0x02FF))
+        }
     }
 
     /**
@@ -2022,8 +2040,15 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 检查是否已保存地址
         val savedAddress = prefs.getInt("provisioner_address", -1)
         if (savedAddress != -1) {
-            Log.d("MeshApp", "使用已保存的地址: 0x${savedAddress.toString(16)}")
-            return savedAddress
+            // 即使有缓存也检查冲突（后续导入可能有新节点占用该地址）
+            val network = MeshState.meshNetWork
+            if (network != null && network.getNode(savedAddress) != null) {
+                Log.w("MeshApp", "缓存地址 0x${savedAddress.toString(16)} 已被节点占用，重新分配")
+                prefs.edit().remove("provisioner_address").apply()
+            } else {
+                Log.d("MeshApp", "使用已保存的地址: 0x${savedAddress.toString(16)}")
+                return savedAddress
+            }
         }
         
         // 基于 Android ID 生成地址
