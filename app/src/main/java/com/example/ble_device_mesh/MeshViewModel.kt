@@ -1979,6 +1979,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         repo.addDevice(device)
                         Log.d("MeshApp", "已从导入配置恢复设备: $name (0x${address.toString(16)})")
                     }
+
+                    // 从导入的设备 MAC 地址填充代理地址历史记录
+                    val allDevices = repo.getAllDevices()
+                    val existingHistory = getProxyAddressHistory().toSet()
+                    allDevices.forEach { d ->
+                        d.bluetoothMac?.let { mac ->
+                            if (mac !in existingHistory) {
+                                saveProxyAddress(mac)
+                            }
+                        }
+                    }
                 }
             } else {
                 // === 旧格式：纯 nRF Mesh JSON ===
