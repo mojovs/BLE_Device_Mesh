@@ -2,6 +2,8 @@ package com.example.ble_device_mesh
 
 import android.app.AlertDialog
 import android.app.TimePickerDialog
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -31,6 +33,7 @@ class StreetlightModeActivity : ComponentActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var adapter: ControlPointAdapter
     private lateinit var btnAddPoint: Button
+    private lateinit var btnToggleNightMode: Button
 
     companion object {
         const val EXTRA_DEVICE_ADDRESS = "extra_device_address"
@@ -83,6 +86,10 @@ class StreetlightModeActivity : ComponentActivity() {
         btnAddPoint = findViewById(R.id.btnAddPoint)
         btnAddPoint.setOnClickListener { addControlPoint() }
 
+        // 夜间聚焦按钮
+        btnToggleNightMode = findViewById(R.id.btnToggleNightMode)
+        updateNightModeButton()
+
         // 加载路灯曲线按钮
         findViewById<Button>(R.id.btnLoadStreetlight).setOnClickListener { loadStreetlightCurve() }
 
@@ -102,6 +109,13 @@ class StreetlightModeActivity : ComponentActivity() {
         curveView.onPointRemoved = { index ->
             refreshListFromCurve()
             updateStatus()
+        }
+
+        // 夜间聚焦模式切换
+        btnToggleNightMode.setOnClickListener {
+            curveView.setNightMode(!curveView.isNightMode())
+            updateNightModeButton()
+            curveView.clearSelection()
         }
 
         // 启用开关
@@ -132,6 +146,14 @@ class StreetlightModeActivity : ComponentActivity() {
         }
         tvStatus.text = desc
         tvStatus.setTextColor(getColor(android.R.color.darker_gray))
+    }
+
+    private fun updateNightModeButton() {
+        val nightMode = curveView.isNightMode()
+        btnToggleNightMode.text = if (nightMode) "全天" else "聚焦夜间"
+        btnToggleNightMode.backgroundTintList = ColorStateList.valueOf(
+            if (nightMode) Color.parseColor("#757575") else Color.parseColor("#7B1FA2")
+        )
     }
 
     private fun addControlPoint() {

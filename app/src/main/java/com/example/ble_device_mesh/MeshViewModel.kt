@@ -19,6 +19,7 @@ import no.nordicsemi.android.mesh.transport.ConfigRelaySet
 import no.nordicsemi.android.mesh.transport.ControlMessage
 import no.nordicsemi.android.mesh.transport.GenericLevelSetUnacknowledged
 import no.nordicsemi.android.mesh.transport.GenericOnOffGet
+import no.nordicsemi.android.mesh.transport.GenericOnOffSet
 import no.nordicsemi.android.mesh.transport.GenericOnOffSetUnacknowledged
 import no.nordicsemi.android.mesh.transport.GenericLevelGet
 import no.nordicsemi.android.mesh.transport.MeshMessage
@@ -69,6 +70,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val autoLightStatusUpdates = MutableLiveData<Triple<Int, Int, Int>>() // Triple<src, enabled(0/1), threshold(0-100)>
         val autoLightEnabledUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)> - derived from GenericOnOffStatus
         val autoLightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(0-100)>
+        val buzzerChimeUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)>
+        val buzzerVolumeUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, volume(0-100)>
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
         val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
@@ -274,19 +277,22 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 Log.d("MeshApp", "  消息类型: ${meshMessage.javaClass.simpleName}")
                 Log.d("MeshApp", "  消息类全名: ${meshMessage.javaClass.name}")
 
-                // 使用反射访问 parameters 字段
-                try {
-                    val paramsField = meshMessage.javaClass.getDeclaredField("parameters")
-                    paramsField.isAccessible = true
-                    val params = paramsField.get(meshMessage) as? ByteArray
-                    if (params != null && params.isNotEmpty()) {
-                        Log.d("MeshApp", "  参数长度: ${params.size} 字节")
-                        Log.d("MeshApp", "  参数数据: ${params.joinToString(" ") { "%02X".format(it) }}")
-                    } else {
-                        Log.d("MeshApp", "  参数: 无")
+                // 获取消息参数
+                val params = try {
+                    // 在类继承层次中查找 mParameters 字段
+                    var clazz: Class<*>? = meshMessage.javaClass
+                    var field: java.lang.reflect.Field? = null
+                    while (clazz != null && field == null) {
+                        try { field = clazz.getDeclaredField("mParameters") } catch (_: NoSuchFieldException) {}
+                        clazz = clazz.superclass
                     }
-                } catch (e: Exception) {
-                    Log.d("MeshApp", "  参数: 无法访问 (${e.message})")
+                    field?.apply { isAccessible = true }?.get(meshMessage) as? ByteArray
+                } catch (_: Exception) { null }
+                if (params != null && params.isNotEmpty()) {
+                    Log.d("MeshApp", "  参数长度: ${params.size} 字节")
+                    Log.d("MeshApp", "  参数数据: ${params.joinToString(" ") { "%02X".format(it) }}")
+                } else {
+                    Log.d("MeshApp", "  参数: 无")
                 }
                 Log.d("MeshApp", "========================")
 
@@ -353,38 +359,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     Log.d("MeshApp", "收到 SchedulerActionStatus (Src: 0x${src.toString(16)})")
                     parseSchedulerActionStatus(src, meshMessage)
                 } else if (meshMessage.opCode == 0x8204) {
-                    // GenericOnOffStatus - 从参数解析 present state
-                    var enabled = 0
-                    try {
-                        val paramsField = meshMessage.javaClass.getDeclaredField("parameters")
-                        paramsField.isAccessible = true
-                        val params = paramsField.get(meshMessage) as? ByteArray
-                        if (params != null && params.isNotEmpty()) {
-                            enabled = if (params[0].toInt() == 1) 1 else 0
-                        }
-                    } catch (e: Exception) {
-                        Log.w("MeshApp", "解析 GenericOnOffStatus parameters 失败: ${e.message}")
-                    }
-                    Log.d("MeshApp", "光敏模式 OnOffStatus(0x8204): enabled=$enabled (src=0x${src.toString(16)})")
+                    // GenericOnOffStatus - 使用公开 API 获取状态
+                    val status = meshMessage as? no.nordicsemi.android.mesh.transport.GenericOnOffStatus
+                    val enabled = if (status?.presentState == true) 1 else 0
+                    Log.d("MeshApp", "GenericOnOffStatus(0x8204): enabled=$enabled (src=0x${src.toString(16)})")
                     MeshState.autoLightEnabledUpdates.postValue(Pair(src, enabled))
+                    // 同步更新蜂鸣器报时状态（由 src 地址区分）
+                    MeshState.buzzerChimeUpdates.postValue(Pair(src, enabled))
                     // 同时更新合并状态（可能缺 threshold，复用上一次的值）
                     val lastKnown = MeshState.autoLightStatusUpdates.value
                     val thr = lastKnown?.third ?: 50
                     MeshState.autoLightStatusUpdates.postValue(Triple(src, enabled, thr))
-                    MeshState.statusText.postValue("光敏模式: ${if (enabled == 1) "已开启" else "已关闭"}, 阈值=$thr%")
                 } else if (meshMessage.opCode == 0x8208) {
-                    // GenericLevelStatus - 从参数解析 present level (int16 LE)
-                    var level = 50
-                    try {
-                        val paramsField = meshMessage.javaClass.getDeclaredField("parameters")
-                        paramsField.isAccessible = true
-                        val params = paramsField.get(meshMessage) as? ByteArray
-                        if (params != null && params.size >= 2) {
-                            level = ((params[1].toInt() shl 8) or (params[0].toInt() and 0xFF)).coerceIn(0, 100)
-                        }
-                    } catch (e: Exception) {
-                        Log.w("MeshApp", "解析 GenericLevelStatus parameters 失败: ${e.message}")
-                    }
+                    // GenericLevelStatus - 使用公开 API 获取 level
+                    val levelStatus = meshMessage as? no.nordicsemi.android.mesh.transport.GenericLevelStatus
+                    val level = levelStatus?.presentLevel?.coerceIn(0, 100) ?: 50
                     Log.d("MeshApp", "GenericLevelStatus(0x8208): level=$level (src=0x${src.toString(16)})")
                     // 更新阈值（可能是 Element 1 回复）
                     val lastKnown = MeshState.autoLightStatusUpdates.value
@@ -392,6 +381,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     MeshState.autoLightStatusUpdates.postValue(Triple(src, en, level))
                     // 也更新亮度（可能是 Element 2 回复）
                     MeshState.autoLightBrightnessUpdates.postValue(Pair(src, level))
+                    // 同步更新蜂鸣器音量（可能是 Element 3 回复）
+                    MeshState.buzzerVolumeUpdates.postValue(Pair(src, level))
                 } else {
                     Log.w("MeshApp", "收到未处理的消息 OpCode: 0x${meshMessage.opCode.toString(16)} (Src: 0x${src.toString(16)})")
                 }
@@ -1278,10 +1269,12 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         Log.d("MeshApp", "发送光敏模式: enable=$enable, threshold=$threshold% to elem=0x${elementAddress.toString(16)}")
 
         try {
-            // Generic OnOff Set: 启用/禁用
-            val onOffMsg = GenericOnOffSetUnacknowledged(appKey, enable == 1, MeshState.currentTid++)
+            // 1) 先发 OnOff Set（有确认版本，Mesh 层会重传直到收到 ACK）
+            val onOffMsg = GenericOnOffSet(appKey, enable == 1, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
-            // Generic Level Set: 阈值 0-100
+            // 2) 乐观更新本地状态，让 UI 立即响应
+            MeshState.autoLightEnabledUpdates.postValue(Pair(elementAddress, enable))
+            // 3) Level Set：阈值（无确认即可）
             val levelMsg = GenericLevelSetUnacknowledged(appKey, threshold, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
             MeshState.statusText.postValue("光敏模式: ${if (enable == 1) "开启" else "关闭"}, 阈值=$threshold%")
@@ -1343,6 +1336,90 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             MeshState.meshManagerApi.createMeshPdu(elementAddr2, msg)
         } catch (e: Exception) {
             Log.e("MeshApp", "发送开灯亮度失败: ${e.message}")
+        }
+    }
+
+    // ========== 整点报时 (Buzzer, Element 3) ==========
+
+    /**
+     * 发送整点报时开关
+     * @param elementAddress Element 3 地址（主地址 + 3）
+     * @param enable 0=关闭, 1=开启
+     */
+    fun sendBuzzerChimeMode(elementAddress: Int, enable: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        Log.d("MeshApp", "发送整点报时: enable=$enable to elem=0x${elementAddress.toString(16)}")
+
+        try {
+            val msg = GenericOnOffSetUnacknowledged(appKey, enable == 1, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("整点报时: ${if (enable == 1) "开启" else "关闭"}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送整点报时开关失败: ${e.message}")
+            MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发送蜂鸣器音量（Element 3）
+     * @param elementAddress Element 3 地址（主地址 + 3）
+     * @param volume 音量 0-100
+     */
+    fun sendBuzzerVolume(elementAddress: Int, volume: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        val vol = volume.coerceIn(0, 100)
+        Log.d("MeshApp", "发送蜂鸣器音量: $vol% to 0x${elementAddress.toString(16)}")
+
+        try {
+            val msg = GenericLevelSetUnacknowledged(appKey, vol, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("蜂鸣器音量: $vol%")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送蜂鸣器音量失败: ${e.message}")
+            MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 读取蜂鸣器配置（Element 3）
+     */
+    fun readBuzzerConfig(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        Log.d("MeshApp", "读取蜂鸣器配置: elem=0x${elementAddress.toString(16)}")
+
+        try {
+            val onOffMsg = GenericOnOffGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
+            val levelMsg = GenericLevelGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
+            MeshState.statusText.postValue("正在读取蜂鸣器配置...")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "读取蜂鸣器配置失败: ${e.message}")
+            MeshState.statusText.postValue("读取失败: ${e.message}")
         }
     }
 
@@ -2745,6 +2822,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getAutoLightStatus(): MutableLiveData<Triple<Int, Int, Int>> = MeshState.autoLightStatusUpdates
     fun getAutoLightEnabled(): MutableLiveData<Pair<Int, Int>> = MeshState.autoLightEnabledUpdates
     fun getAutoLightBrightness(): MutableLiveData<Pair<Int, Int>> = MeshState.autoLightBrightnessUpdates
+    fun getBuzzerChimeEnabled(): MutableLiveData<Pair<Int, Int>> = MeshState.buzzerChimeUpdates
+    fun getBuzzerVolume(): MutableLiveData<Pair<Int, Int>> = MeshState.buzzerVolumeUpdates
 
     /**
      * 发送 Node Reset 命令，清除设备的配网信息

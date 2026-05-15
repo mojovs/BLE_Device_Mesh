@@ -133,7 +133,7 @@ data class StreetlightProfile(
          */
         fun fromSchedulerTasks(tasks: List<SchedulerTask>, deviceAddress: Int): StreetlightProfile? {
             val streetlightTasks = tasks.filter {
-                it.action == SchedulerTask.Action.STREETLIGHT && it.index in 0..7
+                (it.action == SchedulerTask.Action.STREETLIGHT || it.action == SchedulerTask.Action.ON) && it.index in 0..7
             }
 
             if (streetlightTasks.isEmpty()) return null

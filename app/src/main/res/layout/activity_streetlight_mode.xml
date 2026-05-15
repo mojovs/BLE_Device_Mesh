@@ -196,12 +196,26 @@
                             android:minWidth="0dp"
                             android:minHeight="0dp" />
 
+                        <Button
+                            android:id="@+id/btnToggleNightMode"
+                            android:layout_width="wrap_content"
+                            android:layout_height="38dp"
+                            android:layout_marginStart="10dp"
+                            android:text="聚焦夜间"
+                            android:textSize="13sp"
+                            android:backgroundTint="#7B1FA2"
+                            android:textColor="#FFFFFF"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:minWidth="0dp"
+                            android:minHeight="0dp" />
+
                     </LinearLayout>
 
                     <com.example.ble_device_mesh.ui.StreetlightCurveView
                         android:id="@+id/curveView"
                         android:layout_width="match_parent"
-                        android:layout_height="260dp"
+                        android:layout_height="320dp"
                         android:background="#FFFFFF"
                         android:elevation="1dp" />
 

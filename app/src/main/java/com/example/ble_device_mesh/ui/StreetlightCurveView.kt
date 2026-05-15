@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -99,6 +100,21 @@ class StreetlightCurveView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+    // 拖动工具提示
+    private val tooltipBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#2D2D2D")
+        style = Paint.Style.FILL
+    }
+
+    private val tooltipTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = 26f
+    }
+
+    // 时间范围偏移（用于夜间聚焦模式，起始偏移至 12:00）
+    private var nightModeEnabled = false
+    private var rangeStartMinutes = 0
+
     // 触摸相关
     private var draggedPointIndex = -1
     private var selectedPointIndex = -1  // 当前选中的点（放大高亮显示）
@@ -135,6 +151,11 @@ class StreetlightCurveView @JvmOverloads constructor(
         drawCurve(canvas)
         drawControlPoints(canvas)
         drawLabels(canvas)
+
+        // 拖动控制点时显示坐标工具提示
+        if (isDragging && draggedPointIndex >= 0) {
+            drawTooltip(canvas, controlPoints[draggedPointIndex])
+        }
     }
 
     /**
@@ -165,28 +186,29 @@ class StreetlightCurveView @JvmOverloads constructor(
     }
 
     /**
-     * 绘制曲线
+     * 绘制曲线（按显示顺序，支持夜间聚焦模式）
      */
     private fun drawCurve(canvas: Canvas) {
         if (controlPoints.size < 2) return
 
-        val sorted = controlPoints.sortedBy { it.toMinutes() }
+        // 按显示位置排序（夜间模式下从 12:00 开始）
+        val displaySorted = controlPoints.sortedBy { minutesToX(it.toMinutes()) }
 
-        // 绘制填充区域
+        // 绘制填充区域（从左边缘到右边缘）
         val fillPath = Path()
-        fillPath.moveTo(minutesToX(sorted.first().toMinutes()), height - paddingBottom)
-        for (point in sorted) {
+        fillPath.moveTo(paddingLeft, height - paddingBottom)
+        for (point in displaySorted) {
             fillPath.lineTo(minutesToX(point.toMinutes()), brightnessToY(point.brightness))
         }
-        fillPath.lineTo(minutesToX(sorted.last().toMinutes()), height - paddingBottom)
+        fillPath.lineTo(width - paddingRight, height - paddingBottom)
         fillPath.close()
         canvas.drawPath(fillPath, fillPaint)
 
         // 绘制折线
         val path = Path()
-        path.moveTo(minutesToX(sorted.first().toMinutes()), brightnessToY(sorted.first().brightness))
-        for (i in 1 until sorted.size) {
-            path.lineTo(minutesToX(sorted[i].toMinutes()), brightnessToY(sorted[i].brightness))
+        path.moveTo(minutesToX(displaySorted.first().toMinutes()), brightnessToY(displaySorted.first().brightness))
+        for (i in 1 until displaySorted.size) {
+            path.lineTo(minutesToX(displaySorted[i].toMinutes()), brightnessToY(displaySorted[i].brightness))
         }
         canvas.drawPath(path, curvePaint)
     }
@@ -217,20 +239,22 @@ class StreetlightCurveView @JvmOverloads constructor(
     }
 
     /**
-     * 绘制标签
+     * 绘制标签（支持夜间聚焦模式的动态时间刻度）
      */
     private fun drawLabels(canvas: Canvas) {
-        // X轴标签（时间）
+        // X轴标签（时间，根据 rangeStartMinutes 偏移）
         for (hour in 0..24 step 2) {
             val x = paddingLeft + (hour / 24f) * chartWidth
+            val labelHour = ((rangeStartMinutes / 60) + hour) % 24
             canvas.drawText(
-                "$hour",
+                "$labelHour",
                 x - 10,
                 height - paddingBottom + 40,
                 textPaint
             )
         }
-        canvas.drawText("时间(时)", width / 2f - 40, height - 20f, labelPaint)
+        val xTitle = if (nightModeEnabled) "时间(时) · 夜间" else "时间(时)"
+        canvas.drawText(xTitle, width / 2f - 40, height - 20f, labelPaint)
 
         // Y轴标签（亮度）
         for (percent in 0..100 step 20) {
@@ -246,6 +270,48 @@ class StreetlightCurveView @JvmOverloads constructor(
         canvas.rotate(-90f, 30f, height / 2f)
         canvas.drawText("亮度", 30f, height / 2f, labelPaint)
         canvas.restore()
+    }
+
+    /**
+     * 绘制拖动时的坐标工具提示
+     */
+    private fun drawTooltip(canvas: Canvas, point: StreetlightProfile.ControlPoint) {
+        val x = minutesToX(point.toMinutes())
+        val y = brightnessToY(point.brightness)
+        val text = "${point.getTimeString()} ${point.brightness}%"
+
+        val textWidth = tooltipTextPaint.measureText(text)
+        val tooltipWidth = textWidth + 24f
+        val tooltipHeight = 34f
+        val arrowHeight = 8f
+
+        // 显示在控制点上方
+        var rectLeft = x - tooltipWidth / 2
+        val rectTop = y - pointRadius - tooltipHeight - arrowHeight - 10f
+        val rectBottom = rectTop + tooltipHeight
+
+        // 保持在绘图区域内
+        val maxLeft = width - paddingRight - tooltipWidth
+        if (rectLeft < paddingLeft) rectLeft = paddingLeft
+        if (rectLeft > maxLeft) rectLeft = maxLeft
+
+        // 圆角背景
+        val rect = RectF(rectLeft, rectTop, rectLeft + tooltipWidth, rectBottom)
+        canvas.drawRoundRect(rect, 8f, 8f, tooltipBgPaint)
+
+        // 文字居中
+        val textX = rectLeft + (tooltipWidth - textWidth) / 2
+        val textY = rectBottom - 9f
+        canvas.drawText(text, textX, textY, tooltipTextPaint)
+
+        // 向下箭头（指向控制点）
+        val path = Path()
+        val arrowTip = x.coerceIn(rectLeft + arrowHeight, rectLeft + tooltipWidth - arrowHeight)
+        path.moveTo(arrowTip - arrowHeight, rectBottom)
+        path.lineTo(arrowTip, rectBottom + arrowHeight)
+        path.lineTo(arrowTip + arrowHeight, rectBottom)
+        path.close()
+        canvas.drawPath(path, tooltipBgPaint)
     }
 
     /**
@@ -437,9 +503,14 @@ class StreetlightCurveView @JvmOverloads constructor(
 
     /**
      * 坐标转换：分钟数 -> X坐标
+     * 支持时间范围偏移（夜间聚焦模式）
      */
     private fun minutesToX(minutes: Int): Float {
-        return paddingLeft + (minutes / 1440f) * chartWidth
+        var displayMinutes = minutes
+        // 夜间模式下，控制点在 rangeStartMinutes 之前的需要加 1440 以正确显示在右侧
+        if (displayMinutes < rangeStartMinutes) displayMinutes += 1440
+        val ratio = (displayMinutes - rangeStartMinutes).toFloat() / 1440f
+        return paddingLeft + ratio * chartWidth
     }
 
     /**
@@ -451,12 +522,13 @@ class StreetlightCurveView @JvmOverloads constructor(
 
     /**
      * 坐标转换：X坐标 -> 分钟数（带吸附）
+     * 支持时间范围偏移（夜间聚焦模式）
      */
     private fun xToMinutes(x: Float): Int {
         val ratio = (x - paddingLeft).coerceIn(0f, chartWidth) / chartWidth
-        val minutes = (ratio * 1440).roundToInt()
-        // 吸附到 5 分钟粒度
-        return (minutes / snapMinutes) * snapMinutes
+        val minutes = (rangeStartMinutes + ratio * 1440f).roundToInt()
+        // 映射回 0-1439 范围
+        return ((minutes % 1440) / snapMinutes) * snapMinutes
     }
 
     /**
@@ -551,6 +623,23 @@ class StreetlightCurveView @JvmOverloads constructor(
         }
         lastDraggedPoint = null
     }
+
+    /**
+     * 设置夜间聚焦模式
+     * 开启后 X 轴起始点设为 12:00，夜间时段（18:00~06:00）居中展开便于编辑
+     */
+    fun setNightMode(enabled: Boolean) {
+        if (nightModeEnabled != enabled) {
+            nightModeEnabled = enabled
+            rangeStartMinutes = if (enabled) 720 else 0
+            invalidate()
+        }
+    }
+
+    /**
+     * 当前是否为夜间聚焦模式
+     */
+    fun isNightMode(): Boolean = nightModeEnabled
 
     /**
      * 更新指定索引的控制点

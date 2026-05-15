@@ -122,6 +122,11 @@ class DeviceDetailActivity : ComponentActivity() {
         setupCollapsible(R.id.headerTime, R.id.bodyTime, R.id.iconTime, false)
         setupCollapsible(R.id.headerAutoLight, R.id.bodyAutoLight, R.id.iconAutoLight, false)
 
+        // 整点报时卡片
+        try { findViewById<View>(R.id.headerBuzzer) } catch (e: Exception) { null }?.let {
+            setupCollapsible(R.id.headerBuzzer, R.id.bodyBuzzer, R.id.iconBuzzer, false)
+        }
+
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
         val btnBack = findViewById<TextView>(R.id.btnBack)
         val tvConnectionStatus = findViewById<TextView>(R.id.tvConnectionStatus)
@@ -518,8 +523,8 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvLightLevel = findViewById<TextView>(R.id.tvLightLevelValue)
         val btnRefreshLightLevel = findViewById<Button>(R.id.btnRefreshLightLevel)
         
-        device.lightLevel?.let { tvLightLevel.text = "${String.format("%.1f", it)} lux" }
-            ?: run { tvLightLevel.text = "-- lux" }
+        device.lightLevel?.let { tvLightLevel.text = "${String.format("%.0f", it)}%" }
+            ?: run { tvLightLevel.text = "--%" }
         
         btnRefreshLightLevel.setOnClickListener {
             if (viewModel.isConnected.value == true) {
@@ -654,7 +659,7 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察光照度更新
         viewModel.lightLevelUpdates.observe(this) { (address, lux) ->
             if (address == device.address) {
-                tvLightLevel.text = "${String.format("%.1f", lux)} lux"
+                tvLightLevel.text = "${String.format("%.0f", lux)}%"
                 device.lightLevel = lux
                 deviceRepository.updateDevice(device)
             }
@@ -675,6 +680,7 @@ class DeviceDetailActivity : ComponentActivity() {
         if (device.type == com.example.ble_device_mesh.data.DeviceType.LIGHT) {
             setupScheduleCard()
             setupAutoLightCard()
+            setupBuzzerCard()
 
             // 添加定时任务管理按钮
             val btnSchedulerManager = findViewById<Button>(R.id.btnSchedulerManager)
@@ -876,9 +882,10 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         })
 
-        // 开关切换
+        // 开关切换（用 flag 防止程序化更新触发重复发送）
+        var updatingAutoLightSwitch = false
         switchAutoLight.setOnCheckedChangeListener { _, isChecked ->
-            if (viewModel.isConnected.value == true) {
+            if (!updatingAutoLightSwitch && viewModel.isConnected.value == true) {
                 sendAutoLightConfig()
             }
         }
@@ -893,20 +900,22 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
-        // 观察光敏模式状态（从 GenericOnOffStatus + GenericLevelStatus 合并更新）
+        // 观察光敏模式状态：仅更新阈值（开关由 getAutoLightEnabled 独立控制）
         viewModel.getAutoLightStatus().observe(this) { (src, enabled, threshold) ->
             if (src == elem1Addr || src == device.address) {
-                switchAutoLight.isChecked = enabled == 1
                 seekBarThreshold.progress = threshold
                 tvThreshold.text = "$threshold%"
-                Log.d("DeviceDetail", "光敏模式状态已更新: enabled=$enabled, threshold=$threshold%")
+                Log.d("DeviceDetail", "光敏模式阈值已更新: threshold=$threshold%")
             }
         }
 
         // 观察使能状态
         viewModel.getAutoLightEnabled().observe(this) { (src, enabled) ->
             if (src == elem1Addr) {
+                updatingAutoLightSwitch = true
                 switchAutoLight.isChecked = enabled == 1
+                updatingAutoLightSwitch = false
+                com.example.ble_device_mesh.MeshViewModel.MeshState.statusText.postValue("光敏模式: ${if (enabled == 1) "已开启" else "已关闭"}")
             }
         }
 
@@ -939,6 +948,103 @@ class DeviceDetailActivity : ComponentActivity() {
         val threshold = seekBarThreshold.progress
         // 光敏模式使用 Element 1 地址
         viewModel.sendAutoLightMode(device.address + 1, enable, threshold)
+    }
+
+    /**
+     * 设置整点报时卡片
+     * Element 3（地址 = 主地址 + 3）：
+     *   Generic OnOff Server: 报时开关
+     *   Generic Level Server: 音量 0-100
+     */
+    private fun setupBuzzerCard() {
+        val cardBuzzer = try { findViewById<androidx.cardview.widget.CardView>(R.id.cardBuzzer) } catch (e: Exception) { null } ?: return
+        cardBuzzer.visibility = View.VISIBLE
+
+        val switchChime = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchBuzzerChime)
+        val seekBarVolume = findViewById<SeekBar>(R.id.seekBarBuzzerVolume)
+        val tvVolume = findViewById<TextView>(R.id.tvBuzzerVolume)
+        val btnTest = findViewById<Button>(R.id.btnTestBuzzer)
+        val btnRead = findViewById<Button>(R.id.btnReadBuzzer)
+
+        val elem3Addr = device.address + 3  // 蜂鸣器 Element 地址
+
+        // 默认状态
+        switchChime.isChecked = device.hourlyChimeEnabled
+        seekBarVolume.progress = device.buzzerVolume.coerceIn(0, 100)
+        tvVolume.text = "${device.buzzerVolume}%"
+
+        // 音量滑块
+        seekBarVolume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvVolume.text = "$progress%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendBuzzerVolume(elem3Addr, seekBarVolume.progress)
+                    device.buzzerVolume = seekBarVolume.progress
+                    deviceRepository.updateDevice(device)
+                }
+            }
+        })
+
+        // 报时开关
+        switchChime.setOnCheckedChangeListener { _, isChecked ->
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendBuzzerChimeMode(elem3Addr, if (isChecked) 1 else 0)
+                device.hourlyChimeEnabled = isChecked
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 测试蜂鸣按钮
+        btnTest.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                // 先设置音量再触发测试蜂鸣
+                viewModel.sendBuzzerVolume(elem3Addr, seekBarVolume.progress)
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 读取状态按钮
+        btnRead.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.readBuzzerConfig(elem3Addr)
+                Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 观察整点报时状态
+        viewModel.getBuzzerChimeEnabled().observe(this) { (src, enabled) ->
+            if (src == elem3Addr) {
+                switchChime.isChecked = enabled == 1
+                device.hourlyChimeEnabled = enabled == 1
+                deviceRepository.updateDevice(device)
+                com.example.ble_device_mesh.MeshViewModel.MeshState.statusText.postValue("整点报时: ${if (enabled == 1) "已开启" else "已关闭"}")
+            }
+        }
+
+        // 观察音量状态
+        viewModel.getBuzzerVolume().observe(this) { (src, volume) ->
+            if (src == elem3Addr) {
+                val vol = volume.coerceIn(0, 100)
+                seekBarVolume.progress = vol
+                tvVolume.text = "$vol%"
+                device.buzzerVolume = vol
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 连接状态改变时更新按钮启用
+        viewModel.isConnected.observe(this) { connected ->
+            btnTest.isEnabled = connected
+            btnRead.isEnabled = connected
+            switchChime.isEnabled = connected
+            seekBarVolume.isEnabled = connected
+        }
     }
 
     /**

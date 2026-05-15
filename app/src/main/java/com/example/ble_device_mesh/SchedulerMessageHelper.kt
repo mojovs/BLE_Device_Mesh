@@ -103,7 +103,7 @@ object SchedulerMessageHelper {
         // Action: 始终使用实际的 action，不管 enabled 状态
         // enabled 状态通过 Byte 8 传递
         val actionValue = when (task.action) {
-            SchedulerTask.Action.ON -> ScheduleEntryFactory.getActionTurnOn()
+            SchedulerTask.Action.ON, SchedulerTask.Action.STREETLIGHT -> ScheduleEntryFactory.getActionTurnOn()
             SchedulerTask.Action.OFF -> ScheduleEntryFactory.getActionTurnOff()
             else -> ScheduleEntryFactory.getActionNoAction()
         }

@@ -15,10 +15,12 @@ data class MeshDevice(
     var brightness: Int = 50,  // 当前亮度 0-100
     var temperature: Float? = null,  // 当前温度（摄氏度）
     var deviceTime: Long? = null,  // 设备时间（Unix 时间戳，秒）
-    var lightLevel: Float? = null,  // 当前光照度（lux）
+    var lightLevel: Float? = null,  // 当前光照度百分比（0-100%）
     var isOnline: Boolean = false,  // 是否在线
     val addedTime: Long = System.currentTimeMillis(),  // 添加时间
-    var sortOrder: Int = 0  // 排序序号，用于自定义排列
+    var sortOrder: Int = 0,  // 排序序号，用于自定义排列
+    var hourlyChimeEnabled: Boolean = false,  // 整点报时开关
+    var buzzerVolume: Int = 50  // 蜂鸣器音量 0-100
 ) : Parcelable
 
 enum class DeviceType {
