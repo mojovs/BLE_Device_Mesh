@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#FAF5F0">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
     <!-- 顶部工具栏 -->
     <LinearLayout
@@ -55,7 +60,6 @@
         android:layout_marginBottom="8dp"
         app:cardCornerRadius="14dp"
         app:cardElevation="2dp"
-        xmlns:app="http://schemas.android.com/apk/res-auto"
         app:cardBackgroundColor="#FFFFFF">
 
         <LinearLayout
@@ -84,11 +88,11 @@
 
             <ProgressBar
                 android:id="@+id/progressBar"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
+                android:layout_gravity="center_horizontal"
                 android:visibility="gone"
-                style="?android:attr/progressBarStyleHorizontal"
                 android:indeterminate="true" />
 
             <LinearLayout
@@ -157,3 +161,33 @@
         android:paddingEnd="12dp" />
 
 </LinearLayout>
+
+    <!-- 配网中全屏遮罩层，阻止操作 + 显示转圈圈 -->
+    <LinearLayout
+        android:id="@+id/loadingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:background="#80FFFFFF"
+        android:visibility="gone">
+
+        <ProgressBar
+            style="?android:attr/progressBarStyleLarge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:indeterminate="true" />
+
+        <TextView
+            android:id="@+id/tvLoadingStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="正在配网中..."
+            android:textSize="16sp"
+            android:textColor="#FF6B35"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+</FrameLayout>

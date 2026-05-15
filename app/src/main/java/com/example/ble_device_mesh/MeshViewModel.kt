@@ -18,6 +18,7 @@ import no.nordicsemi.android.mesh.transport.ConfigModelSubscriptionDelete
 import no.nordicsemi.android.mesh.transport.ConfigNetworkTransmitSet
 import no.nordicsemi.android.mesh.transport.ConfigRelaySet
 import no.nordicsemi.android.mesh.transport.ControlMessage
+import no.nordicsemi.android.mesh.transport.GenericLevelSet
 import no.nordicsemi.android.mesh.transport.GenericLevelSetUnacknowledged
 import no.nordicsemi.android.mesh.transport.GenericOnOffGet
 import no.nordicsemi.android.mesh.transport.GenericOnOffSet
@@ -1387,12 +1388,38 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         Log.d("MeshApp", "发送蜂鸣器音量: $vol% to 0x${elementAddress.toString(16)}")
 
         try {
-            val msg = GenericLevelSetUnacknowledged(appKey, vol, MeshState.currentTid++)
+            val msg = GenericLevelSet(appKey, vol, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
             MeshState.statusText.postValue("蜂鸣器音量: $vol%")
         } catch (e: Exception) {
             Log.e("MeshApp", "发送蜂鸣器音量失败: ${e.message}")
             MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发送临时蜂鸣（不保存到 Flash），用于连接提示等场景
+     * @param elementAddress Element 3 地址（主地址 + 3）
+     * @param volume 音量 0-100
+     */
+    fun sendBuzzerBeep(elementAddress: Int, volume: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        val vol = volume.coerceIn(0, 100)
+        Log.d("MeshApp", "发送临时蜂鸣: $vol% to 0x${elementAddress.toString(16)}")
+
+        try {
+            val msg = GenericLevelSetUnacknowledged(appKey, vol, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送临时蜂鸣失败: ${e.message}")
         }
     }
 

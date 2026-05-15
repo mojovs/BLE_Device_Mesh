@@ -610,6 +610,11 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnRebindAppKey.isEnabled = true
                 findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
+
+                // 连接成功后蜂鸣器10%音量响一声提示
+                Handler(Looper.getMainLooper()).postDelayed({
+                    viewModel.sendBuzzerBeep(device.address + 3, 10)
+                }, 600)
             } else {
                 tvSignalStrength.visibility = View.GONE
                 tvConnectionStatus.text = "未连接"

@@ -9,7 +9,6 @@ import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.Button
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -56,8 +55,21 @@ class ProvisionActivity : ComponentActivity() {
         }
     }
 
+    /** 配网中禁止返回 */
+    override fun onBackPressed() {
+        if (viewModel.isProvisioning.value == true) {
+            Toast.makeText(this, "配网中，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        super.onBackPressed()
+    }
+
     private fun setupViews() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener {
+            if (viewModel.isProvisioning.value == true) {
+                Toast.makeText(this, "配网中，请稍候...", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             if (isBatchProvisioning) {
                 stopBatchProvisioning()
             }
@@ -178,11 +190,18 @@ class ProvisionActivity : ComponentActivity() {
 
         viewModel.provisioningStatus.observe(this) { status ->
             findViewById<TextView>(R.id.tvProvisionStatus).text = status
+            if (viewModel.isProvisioning.value == true) {
+                findViewById<TextView>(R.id.tvLoadingStatus).text = status
+            }
         }
 
         viewModel.isProvisioning.observe(this) { isProvisioning ->
-            findViewById<ProgressBar>(R.id.progressBar).visibility =
+            findViewById<View>(R.id.loadingOverlay).visibility =
                 if (isProvisioning) View.VISIBLE else View.GONE
+            if (isProvisioning) {
+                findViewById<TextView>(R.id.tvLoadingStatus).text =
+                    viewModel.provisioningStatus.value ?: "正在配网中..."
+            }
         }
 
         viewModel.provisioningComplete.observe(this) { event ->
