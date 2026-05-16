@@ -22,7 +22,8 @@ class ScheduleReceiver : BroadcastReceiver() {
             val appKey = network.appKeys.firstOrNull() ?: return
 
             val level = if (turnOn) {
-                ((brightness - 50) * 655.35).toInt()
+                val gammaBrightness = MeshViewModel.mapBrightnessForOC6701(brightness)
+                ((gammaBrightness - 50) * 655.35).toInt()
             } else {
                 -32768
             }
