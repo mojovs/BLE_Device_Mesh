@@ -18,6 +18,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.NumberPicker
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -125,6 +126,11 @@ class DeviceDetailActivity : ComponentActivity() {
         // 整点报时卡片
         try { findViewById<View>(R.id.headerBuzzer) } catch (e: Exception) { null }?.let {
             setupCollapsible(R.id.headerBuzzer, R.id.bodyBuzzer, R.id.iconBuzzer, false)
+        }
+
+        // 雷达检测卡片
+        try { findViewById<View>(R.id.headerRadar) } catch (e: Exception) { null }?.let {
+            setupCollapsible(R.id.headerRadar, R.id.bodyRadar, R.id.iconRadar, false)
         }
 
         val tvTitle = findViewById<TextView>(R.id.tvTitle)
@@ -611,9 +617,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
                 spinnerProxyAddress.isEnabled = false
 
-                // 连接成功后蜂鸣器10%音量响一声提示
+                // 连接成功后蜂鸣器响一声提示
                 Handler(Looper.getMainLooper()).postDelayed({
-                    viewModel.sendBuzzerBeep(device.address + 3, 10)
+                    viewModel.sendBuzzerBeep(device.address + 3, 50)
                 }, 600)
             } else {
                 tvSignalStrength.visibility = View.GONE
@@ -686,6 +692,7 @@ class DeviceDetailActivity : ComponentActivity() {
             setupScheduleCard()
             setupAutoLightCard()
             setupBuzzerCard()
+            setupRadarCard()
 
             // 添加定时任务管理按钮
             val btnSchedulerManager = findViewById<Button>(R.id.btnSchedulerManager)
@@ -1049,6 +1056,174 @@ class DeviceDetailActivity : ComponentActivity() {
             btnRead.isEnabled = connected
             switchChime.isEnabled = connected
             seekBarVolume.isEnabled = connected
+        }
+    }
+
+    /**
+     * 设置雷达检测卡片
+     * Element 4（地址 = 主地址 + 4）：
+     *   Generic OnOff Server: 雷达检测开关
+     *   Generic Level Server: 夜晚亮灯时长 0-200 (×0.1分钟)
+     *   Vendor Model: 检测时间列表、夜晚时段配置
+     */
+    private fun setupRadarCard() {
+        val cardRadar = try { findViewById<androidx.cardview.widget.CardView>(R.id.cardRadar) } catch (e: Exception) { null } ?: return
+        cardRadar.visibility = View.VISIBLE
+
+        val switchEnable = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)
+        val seekBarDuration = findViewById<SeekBar>(R.id.seekBarRadarDuration)
+        val tvDuration = findViewById<TextView>(R.id.tvRadarDuration)
+        val pickerStart = findViewById<NumberPicker>(R.id.pickerRadarNightStart)
+        val pickerEnd = findViewById<NumberPicker>(R.id.pickerRadarNightEnd)
+        val tvTimes = findViewById<TextView>(R.id.tvRadarTimes)
+        val btnReadTimes = findViewById<Button>(R.id.btnRadarReadTimes)
+        val btnReadConfig = findViewById<Button>(R.id.btnRadarReadConfig)
+
+        val radarRepo = com.example.ble_device_mesh.data.RadarDetectionRepository(applicationContext)
+        val elem4Addr = device.address + 4  // 雷达 Element 地址
+
+        // 配置 NumberPicker
+        pickerStart.minValue = 0
+        pickerStart.maxValue = 23
+        pickerStart.wrapSelectorWheel = false
+        pickerEnd.minValue = 0
+        pickerEnd.maxValue = 23
+        pickerEnd.wrapSelectorWheel = false
+
+        // 默认状态
+        switchEnable.isChecked = device.radarEnabled
+        seekBarDuration.progress = device.radarNightDurationX10.coerceIn(0, 200)
+        tvDuration.text = "%.1f 分钟".format(device.radarNightDurationX10 / 10.0)
+        pickerStart.value = device.radarNightStartHour.coerceIn(0, 23)
+        pickerEnd.value = device.radarNightEndHour.coerceIn(0, 23)
+
+        // 显示本地已有记录数
+        val localRecords = radarRepo.getRecords(device.address)
+        tvTimes.text = if (localRecords.isEmpty()) "尚未读取" else "本地共 ${localRecords.size} 条记录"
+
+        // 时长滑块
+        seekBarDuration.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvDuration.text = "%.1f 分钟".format(progress / 10.0)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendRadarNightDuration(elem4Addr, seekBarDuration.progress)
+                    device.radarNightDurationX10 = seekBarDuration.progress
+                    deviceRepository.updateDevice(device)
+                }
+            }
+        })
+
+        // 启用开关
+        switchEnable.setOnCheckedChangeListener { _, isChecked ->
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendRadarEnable(elem4Addr, if (isChecked) 1 else 0)
+                device.radarEnabled = isChecked
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 夜晚时段 NumberPicker 值变化
+        pickerStart.setOnValueChangedListener { _, _, _ ->
+            val start = pickerStart.value
+            val end = pickerEnd.value
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendRadarNightHoursSet(elem4Addr, start, end)
+                device.radarNightStartHour = start
+                device.radarNightEndHour = end
+                deviceRepository.updateDevice(device)
+            }
+        }
+        pickerEnd.setOnValueChangedListener { _, _, _ ->
+            val start = pickerStart.value
+            val end = pickerEnd.value
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendRadarNightHoursSet(elem4Addr, start, end)
+                device.radarNightStartHour = start
+                device.radarNightEndHour = end
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 读取检测时间
+        btnReadTimes.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendRadarTimesGet(elem4Addr)
+                Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 读取配置
+        btnReadConfig.setOnClickListener {
+            if (viewModel.isConnected.value == true) {
+                viewModel.readRadarConfig(elem4Addr)
+                viewModel.sendRadarNightHoursGet(elem4Addr)
+                Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 观察雷达启用状态
+        viewModel.getRadarStatus().observe(this) { (src, enabled) ->
+            if (src == elem4Addr) {
+                switchEnable.isChecked = enabled == 1
+                device.radarEnabled = enabled == 1
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 观察夜晚亮灯时长
+        viewModel.getRadarNightDuration().observe(this) { (src, durationX10) ->
+            if (src == elem4Addr) {
+                val d = durationX10.coerceIn(0, 200)
+                seekBarDuration.progress = d
+                tvDuration.text = "%.1f 分钟".format(d / 10.0)
+                device.radarNightDurationX10 = d
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 观察检测时间列表（固件当天记录）
+        viewModel.getRadarTimes().observe(this) { (src, times) ->
+            if (src == elem4Addr) {
+                if (times.isEmpty()) {
+                    tvTimes.text = "当天暂无检测记录"
+                } else {
+                    val timeStr = times.joinToString("\n") { "%02d:%02d".format(it.first, it.second) }
+                    tvTimes.text = "当天检测 (${times.size}次):\n$timeStr"
+                }
+                // 导入到本地持久化
+                val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+                radarRepo.importDeviceRecords(device.address, today, times)
+            }
+        }
+
+        // 观察夜晚时段
+        viewModel.getRadarNightHours().observe(this) { (src, hours) ->
+            if (src == elem4Addr) {
+                val startH = hours.first.coerceIn(0, 23)
+                val endH = hours.second.coerceIn(0, 23)
+                pickerStart.value = startH
+                pickerEnd.value = endH
+                device.radarNightStartHour = startH
+                device.radarNightEndHour = endH
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 连接状态改变时更新按钮启用
+        viewModel.isConnected.observe(this) { connected ->
+            btnReadTimes.isEnabled = connected
+            btnReadConfig.isEnabled = connected
+            switchEnable.isEnabled = connected
+            seekBarDuration.isEnabled = connected
+            pickerStart.isEnabled = connected
+            pickerEnd.isEnabled = connected
         }
     }
 

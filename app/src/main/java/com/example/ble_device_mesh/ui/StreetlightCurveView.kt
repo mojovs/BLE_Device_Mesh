@@ -8,8 +8,12 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.util.Log
+import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.ViewConfiguration
 import com.example.ble_device_mesh.data.StreetlightProfile
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -25,6 +29,10 @@ class StreetlightCurveView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
+
+    companion object {
+        private const val TAG = "StreetlightCurveView"
+    }
 
     init {
         // 启用硬件加速
@@ -114,6 +122,36 @@ class StreetlightCurveView @JvmOverloads constructor(
     // 时间范围偏移（用于夜间聚焦模式，起始偏移至 12:00）
     private var nightModeEnabled = false
     private var rangeStartMinutes = 0
+    private var visibleDurationMinutes = 1440f
+    private var minVisibleDurationMinutes = 240f
+    private var maxVisibleDurationMinutes = 1440f
+
+    private val nightFocusStartMinutes = 17 * 60f
+    private val nightFocusDurationMinutes = 14 * 60f
+    private val scaleGestureDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            parent?.requestDisallowInterceptTouchEvent(true)
+            return true
+        }
+
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            val oldDuration = visibleDurationMinutes
+            val scaledDuration = (visibleDurationMinutes / detector.scaleFactor)
+                .coerceIn(minVisibleDurationMinutes, maxVisibleDurationMinutes)
+            if (oldDuration == scaledDuration) return true
+
+            val focusRatio = ((detector.focusX - paddingLeft) / chartWidth).coerceIn(0f, 1f)
+            val focusMinutes = rangeStartMinutes + oldDuration * focusRatio
+            visibleDurationMinutes = scaledDuration
+            rangeStartMinutes = normalizeStartMinutes((focusMinutes - visibleDurationMinutes * focusRatio).roundToInt())
+            Log.d(TAG, "scale focusX=${detector.focusX}, scale=${detector.scaleFactor}, duration=$visibleDurationMinutes, start=$rangeStartMinutes")
+            invalidate()
+            return true
+        }
+    })
+    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean = true
+    })
 
     // 触摸相关
     private var draggedPointIndex = -1
@@ -347,56 +385,101 @@ class StreetlightCurveView @JvmOverloads constructor(
     // 记录 DOWN 事件坐标，用于判断是否是点击（而非拖动）
     private var downX = 0f
     private var downY = 0f
-    private val touchSlop = 8f  // 超过此距离视为拖动（像素）
+    private var lastPanX = 0f
+    private var hasMultiTouchSession = false
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+    override fun performClick(): Boolean {
+        return super.performClick()
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        when (event.action) {
+        gestureDetector.onTouchEvent(event)
+        scaleGestureDetector.onTouchEvent(event)
+        Log.d(TAG, "touch action=${event.actionMasked}, pointers=${event.pointerCount}, x=${event.x}, y=${event.y}, dragged=$draggedPointIndex, multi=$hasMultiTouchSession, scale=${scaleGestureDetector.isInProgress}")
+
+        if (event.pointerCount > 1 || hasMultiTouchSession) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    draggedPointIndex = -1
+                    isDragging = false
+                    hasMultiTouchSession = true
+                    lastPanX = (0 until event.pointerCount).sumOf { event.getX(it).toDouble() }.toFloat() / event.pointerCount
+                    Log.d(TAG, "pointerDown count=${event.pointerCount}, lastPanX=$lastPanX")
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount > 1) {
+                        val panX = (0 until event.pointerCount).sumOf { event.getX(it).toDouble() }.toFloat() / event.pointerCount
+                        val deltaX = panX - lastPanX
+                        Log.d(TAG, "multiMove count=${event.pointerCount}, panX=$panX, lastPanX=$lastPanX, deltaX=$deltaX, duration=$visibleDurationMinutes, start=$rangeStartMinutes")
+                        if (abs(deltaX) >= 1f) {
+                            panTimeline(deltaX)
+                        }
+                        lastPanX = panX
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                    return hasMultiTouchSession
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (event.pointerCount - 1 <= 1) {
+                        hasMultiTouchSession = false
+                    }
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    hasMultiTouchSession = false
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    return true
+                }
+            }
+        }
+
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x
                 downY = event.y
+                lastPanX = event.x
+                hasMultiTouchSession = false
 
                 val hitIndex = findPointNear(event.x, event.y)
                 if (hitIndex >= 0) {
-                    // 点击到控制点：选中并准备拖动
                     draggedPointIndex = hitIndex
                     selectedPointIndex = hitIndex
                     isDragging = false
                     lastDraggedPoint = null
                     animateSelect()
-                    // 立即禁止父布局拦截，确保拖动流畅
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
-                // 点击空白区域，不处理，让父布局 ScrollView 正常滚动
+
                 draggedPointIndex = -1
-                return false
+                parent?.requestDisallowInterceptTouchEvent(false)
+                return true
             }
 
             MotionEvent.ACTION_MOVE -> {
                 if (draggedPointIndex < 0) {
-                    return false
+                    return true
                 }
 
-                // 判断是否开始拖动
                 if (!isDragging) {
                     val dx = abs(event.x - downX)
                     val dy = abs(event.y - downY)
                     if (dx < touchSlop && dy < touchSlop) {
-                        // 还在点击范围内，继续等待
                         return true
                     }
-                    // 开始拖动了
                     isDragging = true
                 }
 
-                // 确保父布局不拦截
                 parent?.requestDisallowInterceptTouchEvent(true)
 
                 val newPoint = createPointFromTouch(event.x, event.y)
-
-                // 约束：不与相邻控制点时间重叠
                 if (canMovePoint(draggedPointIndex, newPoint)) {
-                    // 节流：如果新点与上次拖动点相同，跳过重绘
                     if (newPoint == lastDraggedPoint) {
                         return true
                     }
@@ -411,7 +494,6 @@ class StreetlightCurveView @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> {
                 val handled = draggedPointIndex >= 0
 
-                // 如果没有拖动（只是点击），触发编辑回调
                 if (draggedPointIndex >= 0 && !isDragging) {
                     val point = controlPoints[draggedPointIndex]
                     onPointEdit?.invoke(draggedPointIndex, point)
@@ -419,24 +501,21 @@ class StreetlightCurveView @JvmOverloads constructor(
 
                 draggedPointIndex = -1
                 isDragging = false
-
-                // 恢复父布局事件拦截
+                hasMultiTouchSession = false
                 parent?.requestDisallowInterceptTouchEvent(false)
 
-                return handled
+                return handled || performClick()
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 draggedPointIndex = -1
                 isDragging = false
-
-                // 恢复父布局事件拦截
+                hasMultiTouchSession = false
                 parent?.requestDisallowInterceptTouchEvent(false)
-
-                return false
+                return true
             }
         }
-        return super.onTouchEvent(event)
+        return true
     }
 
     /**
@@ -506,10 +585,10 @@ class StreetlightCurveView @JvmOverloads constructor(
      * 支持时间范围偏移（夜间聚焦模式）
      */
     private fun minutesToX(minutes: Int): Float {
-        var displayMinutes = minutes
-        // 夜间模式下，控制点在 rangeStartMinutes 之前的需要加 1440 以正确显示在右侧
-        if (displayMinutes < rangeStartMinutes) displayMinutes += 1440
-        val ratio = (displayMinutes - rangeStartMinutes).toFloat() / 1440f
+        var displayMinutes = minutes.toFloat()
+        while (displayMinutes < rangeStartMinutes) displayMinutes += 1440f
+        while (displayMinutes > rangeStartMinutes + visibleDurationMinutes) displayMinutes -= 1440f
+        val ratio = (displayMinutes - rangeStartMinutes) / visibleDurationMinutes
         return paddingLeft + ratio * chartWidth
     }
 
@@ -526,9 +605,8 @@ class StreetlightCurveView @JvmOverloads constructor(
      */
     private fun xToMinutes(x: Float): Int {
         val ratio = (x - paddingLeft).coerceIn(0f, chartWidth) / chartWidth
-        val minutes = (rangeStartMinutes + ratio * 1440f).roundToInt()
-        // 映射回 0-1439 范围
-        return ((minutes % 1440) / snapMinutes) * snapMinutes
+        val minutes = (rangeStartMinutes + ratio * visibleDurationMinutes).roundToInt()
+        return (((minutes % 1440) + 1440) % 1440 / snapMinutes) * snapMinutes
     }
 
     /**
@@ -631,9 +709,31 @@ class StreetlightCurveView @JvmOverloads constructor(
     fun setNightMode(enabled: Boolean) {
         if (nightModeEnabled != enabled) {
             nightModeEnabled = enabled
-            rangeStartMinutes = if (enabled) 720 else 0
+            if (enabled) {
+                rangeStartMinutes = nightFocusStartMinutes.roundToInt()
+                visibleDurationMinutes = nightFocusDurationMinutes
+                minVisibleDurationMinutes = 120f
+            } else {
+                rangeStartMinutes = 0
+                visibleDurationMinutes = 1440f
+                minVisibleDurationMinutes = 240f
+            }
+            maxVisibleDurationMinutes = 1440f
             invalidate()
         }
+    }
+
+    private fun normalizeStartMinutes(value: Int): Int {
+        val normalized = value % 1440
+        return if (normalized < 0) normalized + 1440 else normalized
+    }
+
+    private fun panTimeline(deltaX: Float) {
+        if (chartWidth <= 0f) return
+        val deltaMinutes = -(deltaX / chartWidth) * visibleDurationMinutes
+        rangeStartMinutes = normalizeStartMinutes((rangeStartMinutes + deltaMinutes).roundToInt())
+        Log.d(TAG, "pan deltaX=$deltaX, deltaMinutes=$deltaMinutes, newStart=$rangeStartMinutes")
+        invalidate()
     }
 
     /**

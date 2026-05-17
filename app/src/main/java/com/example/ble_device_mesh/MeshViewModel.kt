@@ -30,6 +30,9 @@ import no.nordicsemi.android.mesh.transport.SensorStatus
 import no.nordicsemi.android.mesh.transport.TimeGet
 import no.nordicsemi.android.mesh.transport.TimeSet
 import no.nordicsemi.android.mesh.transport.TimeStatus
+import no.nordicsemi.android.mesh.transport.VendorModelMessageUnacked
+import no.nordicsemi.android.mesh.transport.VendorModelMessageAcked
+import no.nordicsemi.android.mesh.transport.VendorModelMessageStatus
 import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
 import com.example.ble_device_mesh.data.MeshDevice
@@ -74,6 +77,12 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val autoLightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(0-100)>
         val buzzerChimeUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)>
         val buzzerVolumeUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, volume(0-100)>
+
+        // 雷达模式状态
+        val radarStatusUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)>
+        val radarNightDurationUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, duration_x10>
+        val radarTimesUpdates = MutableLiveData<Pair<Int, List<Pair<Int, Int>>>>() // Pair<src, List<(hour,min)>>
+        val radarNightHoursUpdates = MutableLiveData<Pair<Int, Pair<Int, Int>>>() // Pair<src, Pair<startHour, endHour>>
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
         val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
@@ -84,7 +93,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val connectedDeviceAddress = MutableLiveData<String?>(null)
         val currentProvisionerAddress = MutableLiveData<Int>()
         val currentRssi = MutableLiveData<Int>(-999)
-        
+
+        // 设备在线状态跟踪
+        val lastMessageTime = mutableMapOf<Int, Long>()  // 设备地址 → 最后收到消息的时间戳
+        val deviceOnlineUpdates = MutableLiveData<Unit>()  // 在线状态变化信号
+
         // 超时处理
         val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
         var schedulerGetTimeoutRunnable: Runnable? = null
@@ -153,6 +166,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     val isScanning get() = MeshState.isScanning
     val connectedDeviceAddress get() = MeshState.connectedDeviceAddress
     val currentProvisionerAddress get() = MeshState.currentProvisionerAddress
+    val deviceOnlineUpdates get() = MeshState.deviceOnlineUpdates
     
     // 配网相关
     val unprovisionedDevices get() = MeshState.unprovisionedDevices
@@ -187,6 +201,13 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         initializeGlobalState(application)
     }
 
+    private val onlineCheckRunnable = object : Runnable {
+        override fun run() {
+            checkDevicesOnlineStatus()
+            MeshState.mainHandler.postDelayed(this, ONLINE_CHECK_INTERVAL_MS)
+        }
+    }
+
     private fun initializeGlobalState(app: Application) {
         if (MeshState.isInitialized) return
         
@@ -203,6 +224,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         Log.d("MeshApp", "loadMeshNetwork() 调用完成")
         
         MeshState.isInitialized = true
+
+        // 启动设备在线状态定时检查
+        MeshState.mainHandler.postDelayed(onlineCheckRunnable, ONLINE_CHECK_INTERVAL_MS)
+        Log.d("MeshApp", "设备在线状态检查已启动，间隔 ${ONLINE_CHECK_INTERVAL_MS / 1000}s，超时 ${ONLINE_TIMEOUT_MS / 1000}s")
     }
     
     private fun setupCallbacks() {
@@ -368,10 +393,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     MeshState.autoLightEnabledUpdates.postValue(Pair(src, enabled))
                     // 同步更新蜂鸣器报时状态（由 src 地址区分）
                     MeshState.buzzerChimeUpdates.postValue(Pair(src, enabled))
-                    // 同时更新合并状态（可能缺 threshold，复用上一次的值）
-                    val lastKnown = MeshState.autoLightStatusUpdates.value
-                    val thr = lastKnown?.third ?: 50
-                    MeshState.autoLightStatusUpdates.postValue(Triple(src, enabled, thr))
+                    // 同步更新雷达启用状态（Element 4）
+                    MeshState.radarStatusUpdates.postValue(Pair(src, enabled))
+                    // THRESHOLD 由 0x8208 单独更新，此处不覆盖（否则 User 拖 SeekBar 中收到回复会回弹）
                 } else if (meshMessage.opCode == 0x8208) {
                     // GenericLevelStatus - 使用公开 API 获取 level
                     val levelStatus = meshMessage as? no.nordicsemi.android.mesh.transport.GenericLevelStatus
@@ -385,6 +409,42 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     MeshState.autoLightBrightnessUpdates.postValue(Pair(src, level))
                     // 同步更新蜂鸣器音量（可能是 Element 3 回复）
                     MeshState.buzzerVolumeUpdates.postValue(Pair(src, level))
+                    // 同步更新雷达夜晚时长（可能是 Element 4 回复）
+                    MeshState.radarNightDurationUpdates.postValue(Pair(src, level))
+                } else if (meshMessage is VendorModelMessageStatus) {
+                    val data = meshMessage.parameters
+                    Log.d("MeshApp", "收到 VendorModelMessageStatus (Src: 0x${src.toString(16)}): opCode=0x${meshMessage.opCode.toString(16)}, data=${data?.joinToString("") { "%02X".format(it) }}")
+                    when (meshMessage.opCode) {
+                        OP_RADAR_TIMES_STATUS -> {
+                            // 解析检测时间列表: [count(1B), hour1(1B), min1(1B), hour2(1B), min2(1B), ...]
+                            if (data != null && data.isNotEmpty()) {
+                                val count = data[0].toInt() and 0xFF
+                                val times = mutableListOf<Pair<Int, Int>>()
+                                for (i in 0 until count) {
+                                    val idx = 1 + i * 2
+                                    if (idx + 1 < data.size) {
+                                        val hour = data[idx].toInt() and 0xFF
+                                        val minute = data[idx + 1].toInt() and 0xFF
+                                        times.add(Pair(hour, minute))
+                                    }
+                                }
+                                Log.d("MeshApp", "雷达检测时间列表(count=$count): ${times.joinToString { "%02d:%02d".format(it.first, it.second) }}")
+                                MeshState.radarTimesUpdates.postValue(Pair(src, times.toList()))
+                            }
+                        }
+                        OP_RADAR_NIGHT_HOURS_GET -> {
+                            // 解析夜晚时段: [startHour(1B), endHour(1B)]
+                            if (data != null && data.size >= 2) {
+                                val startHour = data[0].toInt() and 0xFF
+                                val endHour = data[1].toInt() and 0xFF
+                                Log.d("MeshApp", "雷达夜晚时段: $startHour:00 - $endHour:00")
+                                MeshState.radarNightHoursUpdates.postValue(Pair(src, Pair(startHour, endHour)))
+                            }
+                        }
+                        else -> {
+                            Log.w("MeshApp", "未处理的 Vendor OpCode: 0x${meshMessage.opCode.toString(16)}")
+                        }
+                    }
                 } else {
                     Log.w("MeshApp", "收到未处理的消息 OpCode: 0x${meshMessage.opCode.toString(16)} (Src: 0x${src.toString(16)})")
                 }
@@ -1330,10 +1390,15 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
 
         val bri = brightness.coerceIn(1, 100)
-        Log.d("MeshApp", "发送自动开灯亮度: $bri% to 0x${elementAddr2.toString(16)}")
+        val mappedBrightness = mapBrightnessForOC6701(bri)
+        val level = ((mappedBrightness - 50) * 655.35).toInt()
+        Log.d(
+            "MeshApp",
+            "发送自动开灯亮度: UI=$bri%, mapped=$mappedBrightness%, level=$level to 0x${elementAddr2.toString(16)}"
+        )
 
         try {
-            val msg = GenericLevelSetUnacknowledged(appKey, bri, MeshState.currentTid++)
+            val msg = GenericLevelSetUnacknowledged(appKey, level, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddr2, msg)
         } catch (e: Exception) {
             Log.e("MeshApp", "发送开灯亮度失败: ${e.message}")
@@ -1447,6 +1512,135 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         } catch (e: Exception) {
             Log.e("MeshApp", "读取蜂鸣器配置失败: ${e.message}")
             MeshState.statusText.postValue("读取失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 读取雷达配置（Element 4 OnOff + Level）
+     */
+    fun readRadarConfig(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "读取雷达配置: elem=0x${elementAddress.toString(16)}")
+        try {
+            val onOffMsg = GenericOnOffGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
+            val levelMsg = GenericLevelGet(appKey)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "读取雷达配置失败: ${e.message}")
+        }
+    }
+
+    // ========== 雷达模式 ==========
+
+    /**
+     * 发送雷达启用/禁用（Element 4 Generic OnOff）
+     */
+    fun sendRadarEnable(elementAddress: Int, enable: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "发送雷达启用: enable=$enable to 0x${elementAddress.toString(16)}")
+        try {
+            val msg = GenericOnOffSetUnacknowledged(appKey, enable == 1, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("雷达模式: ${if (enable == 1) "开启" else "关闭"}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送雷达开关失败: ${e.message}")
+            MeshState.statusText.postValue("雷达开关发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发送夜晚亮灯时长（Element 4 Generic Level）
+     * @param durationX10 0-200 (0.0-20.0 分钟, ×10)
+     */
+    fun sendRadarNightDuration(elementAddress: Int, durationX10: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        val v = durationX10.coerceIn(0, 200)
+        Log.d("MeshApp", "发送雷达夜晚时长: $v (${v/10.0}min) to 0x${elementAddress.toString(16)}")
+        try {
+            val msg = GenericLevelSetUnacknowledged(appKey, v, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("夜晚亮灯时长: ${v/10.0} 分钟")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送雷达时长失败: ${e.message}")
+            MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 请求读取检测时间列表（Element 4 厂商模型）
+     */
+    fun sendRadarTimesGet(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "请求雷达检测时间: 0x${elementAddress.toString(16)}")
+        try {
+            val msg = VendorModelMessageUnacked(appKey, RADAR_VENDOR_MODEL_ID, RADAR_CID, OP_RADAR_TIMES_GET, null)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("正在读取检测时间列表...")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "请求检测时间失败: ${e.message}")
+            MeshState.statusText.postValue("请求失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 请求读取夜晚时段（Element 4 厂商模型）
+     */
+    fun sendRadarNightHoursGet(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "请求雷达夜晚时段: 0x${elementAddress.toString(16)}")
+        try {
+            val msg = VendorModelMessageUnacked(appKey, RADAR_VENDOR_MODEL_ID, RADAR_CID, OP_RADAR_NIGHT_HOURS_GET, null)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "请求夜晚时段失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 设置夜晚时段（Element 4 厂商模型）
+     */
+    fun sendRadarNightHoursSet(elementAddress: Int, startHour: Int, endHour: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "设置雷达夜晚时段: $startHour:00 - $endHour:00")
+        try {
+            val params = byteArrayOf(startHour.toByte(), endHour.toByte())
+            val msg = VendorModelMessageUnacked(appKey, RADAR_VENDOR_MODEL_ID, RADAR_CID, OP_RADAR_NIGHT_HOURS_SET, params)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("夜晚时段: $startHour:00 - $endHour:00")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "设置夜晚时段失败: ${e.message}")
+            MeshState.statusText.postValue("设置失败: ${e.message}")
         }
     }
 
@@ -2891,6 +3085,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getAutoLightBrightness(): MutableLiveData<Pair<Int, Int>> = MeshState.autoLightBrightnessUpdates
     fun getBuzzerChimeEnabled(): MutableLiveData<Pair<Int, Int>> = MeshState.buzzerChimeUpdates
     fun getBuzzerVolume(): MutableLiveData<Pair<Int, Int>> = MeshState.buzzerVolumeUpdates
+    fun getRadarStatus(): MutableLiveData<Pair<Int, Int>> = MeshState.radarStatusUpdates
+    fun getRadarNightDuration(): MutableLiveData<Pair<Int, Int>> = MeshState.radarNightDurationUpdates
+    fun getRadarTimes(): MutableLiveData<Pair<Int, List<Pair<Int, Int>>>> = MeshState.radarTimesUpdates
+    fun getRadarNightHours(): MutableLiveData<Pair<Int, Pair<Int, Int>>> = MeshState.radarNightHoursUpdates
 
     /**
      * 发送 Node Reset 命令，清除设备的配网信息
@@ -3029,6 +3227,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      */
     private fun markDeviceOnline(src: Int) {
         try {
+            MeshState.lastMessageTime[src] = System.currentTimeMillis()
             val repo = DeviceRepository(getApplication())
             val devices = repo.getAllDevices()
             val device = devices.find { it.address == src }
@@ -3036,9 +3235,41 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 device.isOnline = true
                 repo.updateDevice(device)
                 Log.d("MeshApp", "设备 0x${src.toString(16)} 标记为在线")
+                MeshState.deviceOnlineUpdates.postValue(Unit)
             }
         } catch (e: Exception) {
             Log.e("MeshApp", "标记设备在线失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 定期检查设备在线状态，超时未收到消息的标记为离线
+     */
+    private fun checkDevicesOnlineStatus() {
+        try {
+            val repo = DeviceRepository(getApplication())
+            val devices = repo.getAllDevices()
+            if (devices.isEmpty()) return
+            val now = System.currentTimeMillis()
+            var changed = false
+
+            for (device in devices) {
+                if (!device.isOnline) continue
+                val lastTime = MeshState.lastMessageTime[device.address]
+                if (lastTime == null || now - lastTime > ONLINE_TIMEOUT_MS) {
+                    device.isOnline = false
+                    repo.updateDevice(device)
+                    MeshState.lastMessageTime.remove(device.address)
+                    changed = true
+                    Log.d("MeshApp", "设备 0x${device.address.toString(16)} 离线（超时 ${(now - (lastTime ?: 0)) / 1000}s）")
+                }
+            }
+
+            if (changed) {
+                MeshState.deviceOnlineUpdates.postValue(Unit)
+            }
+        } catch (e: Exception) {
+            Log.e("MeshApp", "检查在线状态失败: ${e.message}")
         }
     }
 
@@ -3056,6 +3287,16 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         const val CONFIG_WAIT_COMPOSITION = 1
         const val CONFIG_WAIT_APPKEY = 2
         const val CONFIG_BINDING = 3
+        const val ONLINE_TIMEOUT_MS = 300_000L       // 5 分钟无消息标记离线
+        const val ONLINE_CHECK_INTERVAL_MS = 30_000L  // 每 30 秒检查一次
+
+        // Vendor model constants (雷达)
+        const val RADAR_CID = 0x07D7
+        const val RADAR_VENDOR_MODEL_ID = 0x0002
+        const val OP_RADAR_TIMES_GET = 0xC107D7
+        const val OP_RADAR_TIMES_STATUS = 0xC207D7
+        const val OP_RADAR_NIGHT_HOURS_GET = 0xC307D7
+        const val OP_RADAR_NIGHT_HOURS_SET = 0xC407D7
 
         /** OC6701 Gamma 校正指数 — 数值越大，中高段分配越多分辨率 */
         const val OC6701_GAMMA = 3.0

@@ -26,14 +26,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         try {
             setContentView(R.layout.activity_main)
-            
+
             deviceRepository = DeviceRepository(this)
-            
+
             // 清除旧的温度数据，避免显示过期的信息
             deviceRepository.clearAllTemperatures()
-            
+
             setupViews()
             loadDevices()
+
+            // 自动连接已有设备
+            tryAutoConnect()
         } catch (e: Exception) {
             Log.e("MainActivity", "onCreate 严重错误: ${e.message}")
             e.printStackTrace()
@@ -135,6 +138,8 @@ class MainActivity : ComponentActivity() {
                 tvStatus.text = "状态: 已连接到 Proxy"
                 // 启动时间同步服务
                 TimeSyncService.start(this)
+                // 连接后立即读取所有设备的温度
+                readAllTemperatures()
             }
         }
         
@@ -163,15 +168,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // 在线状态变化刷新设备列表
+        viewModel.deviceOnlineUpdates.observe(this) {
+            loadDevices()
+        }
+
     }
     
     private fun loadDevices() {
         val devices = deviceRepository.getAllDevices()
         deviceAdapter.updateDevices(devices)
-        
+
         val layoutEmpty = findViewById<LinearLayout>(R.id.layoutEmpty)
         val rvDevices = findViewById<RecyclerView>(R.id.rvDevices)
-        
+
         if (devices.isEmpty()) {
             layoutEmpty.visibility = View.VISIBLE
             rvDevices.visibility = View.GONE
@@ -179,8 +189,22 @@ class MainActivity : ComponentActivity() {
             layoutEmpty.visibility = View.GONE
             rvDevices.visibility = View.VISIBLE
         }
+
+        // 更新在线/离线计数
+        val tvDeviceCount = findViewById<TextView>(R.id.tvDeviceCount)
+        val onlineCount = devices.count { it.isOnline }
+        tvDeviceCount.text = if (onlineCount > 0) "$onlineCount/${devices.size} 台在线" else "${devices.size} 台"
     }
     
+    private fun tryAutoConnect() {
+        if (viewModel.isConnected.value == true) return
+        Log.d("MainActivity", "自动连接已有设备...")
+        viewModel.autoConnectFromHistory(onAllFailed = {
+            Log.d("MainActivity", "历史设备均无法连接，开始扫描...")
+            viewModel.autoConnectToProxy()
+        })
+    }
+
     private fun showAddDeviceDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_add_device, null)
         val etDeviceName = dialogView.findViewById<EditText>(R.id.etDeviceName)
@@ -277,29 +301,28 @@ class MainActivity : ComponentActivity() {
         startTemperaturePolling()
     }
     
+    private fun readAllTemperatures() {
+        try {
+            if (isFinishing || isDestroyed) return
+            if (viewModel.isConnected.value != true) return
+
+            val devices = deviceRepository.getAllDevices()
+            if (devices.isNotEmpty()) {
+                Log.d("MainActivity", "读取 ${devices.size} 个设备的传感器数据...")
+                devices.forEach { device ->
+                    viewModel.readSensors(device.address)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "读取温度出错: ${e.message}")
+        }
+    }
+
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val temperatureRunnable = object : Runnable {
         override fun run() {
-            try {
-                if (isFinishing || isDestroyed) return
-                
-                val connected = viewModel.isConnected.value == true
-                // Log.d("MainActivity", "传感器轮询检查 - 连接状态: $connected")
-                
-                if (connected) {
-                    val devices = deviceRepository.getAllDevices()
-                    if (devices.isNotEmpty()) {
-                        Log.d("MainActivity", "读取 ${devices.size} 个设备的传感器数据...")
-                        devices.forEach { device ->
-                            viewModel.readSensors(device.address)
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "传感器轮询出错: ${e.message}")
-            } finally {
-                handler.postDelayed(this, 30000) // 30秒后再次执行
-            }
+            readAllTemperatures()
+            handler.postDelayed(this, 30000) // 30秒后再次执行
         }
     }
 

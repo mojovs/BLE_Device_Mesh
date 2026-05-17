@@ -1422,6 +1422,250 @@
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
 
+            <!-- ===== 雷达人体检测卡片 ===== -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/cardRadar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:cardBackgroundColor="#FFFFFF">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/headerRadar"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="14dp"
+                        android:background="?android:attr/selectableItemBackground">
+
+                        <View
+                            android:layout_width="4dp"
+                            android:layout_height="20dp"
+                            android:layout_marginEnd="12dp"
+                            android:background="#4CAF50" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="雷达人体检测"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:textColor="#2D2D2D" />
+
+                        <TextView
+                            android:id="@+id/iconRadar"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textSize="20sp"
+                            android:textColor="#9CA3AF" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#F0F0F0" />
+
+                    <LinearLayout
+                        android:id="@+id/bodyRadar"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingTop="12dp"
+                        android:paddingBottom="16dp"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="HLK-LD1040 人体检测，记录时间、蜂鸣提示、夜晚自动亮灯"
+                            android:textSize="13sp"
+                            android:textColor="#9CA3AF"
+                            android:layout_marginBottom="12dp" />
+
+                        <!-- 启用开关 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="启用雷达检测"
+                                android:textSize="14sp"
+                                android:textColor="#333333" />
+
+                            <androidx.appcompat.widget.SwitchCompat
+                                android:id="@+id/switchRadarEnable"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:thumbTint="@color/switch_thumb_selector"
+                                app:trackTint="@color/switch_track_selector" />
+                        </LinearLayout>
+
+                        <!-- 夜晚亮灯时长 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="16dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="夜晚亮灯时长"
+                                    android:textSize="14sp"
+                                    android:textColor="#333333" />
+
+                                <TextView
+                                    android:id="@+id/tvRadarDuration"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="3.0 分钟"
+                                    android:textSize="14sp"
+                                    android:textColor="#4CAF50"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <SeekBar
+                                android:id="@+id/seekBarRadarDuration"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:max="200"
+                                android:progress="30" />
+                        </LinearLayout>
+
+                        <!-- 夜晚时段 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="16dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="夜晚时段"
+                                android:textSize="14sp"
+                                android:textColor="#333333"
+                                android:layout_marginBottom="8dp" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <NumberPicker
+                                    android:id="@+id/pickerRadarNightStart"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text=":00  —  "
+                                    android:textSize="16sp"
+                                    android:textColor="#333333" />
+
+                                <NumberPicker
+                                    android:id="@+id/pickerRadarNightEnd"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text=":00"
+                                    android:textSize="16sp"
+                                    android:textColor="#333333" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <!-- 检测时间列表 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="16dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="当天检测时间"
+                                android:textSize="14sp"
+                                android:textColor="#333333"
+                                android:layout_marginBottom="4dp" />
+
+                            <TextView
+                                android:id="@+id/tvRadarTimes"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="尚未读取"
+                                android:textSize="13sp"
+                                android:textColor="#9CA3AF"
+                                android:lineSpacingExtra="4dp" />
+                        </LinearLayout>
+
+                        <!-- 按钮组 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="12dp">
+
+                            <Button
+                                android:id="@+id/btnRadarReadTimes"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:text="读取检测时间"
+                                android:textSize="13sp"
+                                android:backgroundTint="#4CAF50"
+                                android:enabled="false" />
+
+                            <Button
+                                android:id="@+id/btnRadarReadConfig"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:text="读取配置"
+                                android:textSize="13sp"
+                                android:backgroundTint="#9E9E9E"
+                                android:enabled="false"
+                                android:layout_marginStart="8dp" />
+                        </LinearLayout>
+
+                    </LinearLayout>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
             <!-- ===== 转发配置卡片 ===== -->
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"

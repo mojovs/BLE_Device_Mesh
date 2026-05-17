@@ -158,7 +158,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="拖动或点击控制点调整，长按控制点编辑"
+                        android:text="拖动或点击控制点调整，双指缩放时间轴，双指左右拖动平移视图"
                         android:textSize="12sp"
                         android:textColor="#6B7280"
                         android:layout_marginBottom="12dp" />

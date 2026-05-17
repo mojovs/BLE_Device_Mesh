@@ -20,7 +20,11 @@ data class MeshDevice(
     val addedTime: Long = System.currentTimeMillis(),  // 添加时间
     var sortOrder: Int = 0,  // 排序序号，用于自定义排列
     var hourlyChimeEnabled: Boolean = false,  // 整点报时开关
-    var buzzerVolume: Int = 50  // 蜂鸣器音量 0-100
+    var buzzerVolume: Int = 50,  // 蜂鸣器音量 0-100
+    var radarEnabled: Boolean = false,  // 雷达检测开关
+    var radarNightDurationX10: Int = 30,  // 夜晚亮灯时长 (×0.1分钟), 默认3.0分钟
+    var radarNightStartHour: Int = 18,  // 夜晚开始小时
+    var radarNightEndHour: Int = 6  // 夜晚结束小时
 ) : Parcelable
 
 enum class DeviceType {
