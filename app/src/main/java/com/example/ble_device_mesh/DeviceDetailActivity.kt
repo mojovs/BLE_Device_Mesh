@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.lifecycle.Observer
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -47,7 +48,9 @@ class DeviceDetailActivity : ComponentActivity() {
     private val schedulerRepository by lazy { SchedulerRepository(this) }
     private val schedulerReadTasks = mutableMapOf<Int, SchedulerTask>()
     private val pendingSchedulerIndexes = mutableSetOf<Int>()
-    private var isInitialSelection = true  // 标记是否是初始化时的选择
+    private var isProxyInitialSelection = true
+    private var ignoreGroupSelection = false
+    private var isGroupSelectionFromUser = false
     private val timeSyncHandler = Handler(Looper.getMainLooper())
     private var timeSyncTimeoutRunnable: Runnable? = null
     private var isTimeSyncInProgress = false
@@ -56,7 +59,7 @@ class DeviceDetailActivity : ComponentActivity() {
     // 亮度拖动节流
     private val brightnessHandler = Handler(Looper.getMainLooper())
     private var lastBrightnessSendTime = 0L
-    private val brightnessThrottleMs = 120L  // 最小发送间隔 120ms
+    private val brightnessThrottleMs = 50L
     private var pendingBrightness = -1  // 暂存的亮度值，用于延迟发送
     
     companion object {
@@ -176,27 +179,41 @@ class DeviceDetailActivity : ComponentActivity() {
             adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             spinnerGroup.adapter = adapter
 
-            // 选择设备当前所属分组
-            if (selectGroupId != null) {
+            val targetPosition = if (selectGroupId != null) {
                 val idx = groups.indexOfFirst { it.id == selectGroupId }
-                if (idx >= 0) spinnerGroup.setSelection(idx + 1)
+                if (idx >= 0) idx + 1 else 0
             } else {
                 val currentGroups = groupRepository.getGroupsForDevice(device.id)
-                if (currentGroups.isNotEmpty()) {
-                    val idx = groups.indexOfFirst { it.id == currentGroups[0].id }
-                    if (idx >= 0) spinnerGroup.setSelection(idx + 1)
-                }
+                val idx = currentGroups.firstOrNull()?.let { group ->
+                    groups.indexOfFirst { it.id == group.id }
+                } ?: -1
+                if (idx >= 0) idx + 1 else 0
             }
+
+            ignoreGroupSelection = true
+            spinnerGroup.setSelection(targetPosition)
+            spinnerGroup.post { ignoreGroupSelection = false }
         }
 
+        ignoreGroupSelection = true
         refreshGroupSpinner()
-
-        isInitialSelection = true
+        spinnerGroup.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                isGroupSelectionFromUser = true
+            }
+            false
+        }
         spinnerGroup.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (isInitialSelection) { isInitialSelection = false; return }
+                if (ignoreGroupSelection || !isGroupSelectionFromUser) return
+                isGroupSelectionFromUser = false
                 val groups = groupRepository.getAllGroups()
                 val prevGroups = groupRepository.getGroupsForDevice(device.id)
+                val currentPosition = prevGroups.firstOrNull()?.let { group ->
+                    val idx = groups.indexOfFirst { it.id == group.id }
+                    if (idx >= 0) idx + 1 else 0
+                } ?: 0
+                if (position == currentPosition) return
 
                 if (position == 0) {
                     // 选择"无分组"：取消订阅所有分组
@@ -240,10 +257,6 @@ class DeviceDetailActivity : ComponentActivity() {
         btnCreateGroup.setOnClickListener {
             showCreateGroupDialog { newGroup ->
                 groupRepository.addGroup(newGroup)
-                refreshGroupSpinner(newGroup.id)
-                isInitialSelection = true
-                // 触发订阅
-                viewModel.subscribeDeviceToGroup(device.address, newGroup.address)
                 val updatedGroup = newGroup.copy(
                     memberDeviceIds = (newGroup.memberDeviceIds + device.id).distinct()
                 )
@@ -251,6 +264,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 device.groupIds = mutableListOf(newGroup.id)
                 device.groupAddress = newGroup.address
                 deviceRepository.updateDevice(device)
+                ignoreGroupSelection = true
+                refreshGroupSpinner(newGroup.id)
+                viewModel.subscribeDeviceToGroup(device.address, newGroup.address)
                 Toast.makeText(this, "已创建并加入分组：${newGroup.name}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -332,11 +348,11 @@ class DeviceDetailActivity : ComponentActivity() {
         // Spinner 选择监听 - 自动连接
         spinnerProxyAddress.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                Log.d("DeviceDetailActivity", "onItemSelected 被调用: position=$position, isInitialSelection=$isInitialSelection")
+                Log.d("DeviceDetailActivity", "onItemSelected 被调用: position=$position, isProxyInitialSelection=$isProxyInitialSelection")
 
                 // 跳过初始化时的自动触发
-                if (isInitialSelection) {
-                    isInitialSelection = false
+                if (isProxyInitialSelection) {
+                    isProxyInitialSelection = false
                     Log.d("DeviceDetailActivity", "跳过初始选择")
                     return
                 }
@@ -374,7 +390,7 @@ class DeviceDetailActivity : ComponentActivity() {
         btnConnect.setOnClickListener {
             if (viewModel.isConnected.value == true) {
                 // 断开前，禁用自动连接
-                isInitialSelection = true
+                isProxyInitialSelection = true
                 viewModel.disconnectDevice()
             }
         }
@@ -639,7 +655,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 updateOperationEnabled(connected = false)
 
                 // 刷新 Spinner 列表（可能有新的历史记录）
-                isInitialSelection = true  // 重置标志，避免自动触发连接
+                isProxyInitialSelection = true  // 重置标志，避免自动触发连接
                 setupProxySpinner(spinnerProxyAddress)
             }
         }
@@ -651,7 +667,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 val history = viewModel.getProxyAddressHistory()
                 val index = history.indexOf(address)
                 if (index >= 0) {
-                    isInitialSelection = true  // 防止触发自动连接
+                    isProxyInitialSelection = true  // 防止触发自动连接
                     spinnerProxyAddress.setSelection(index)
                 }
                 if (viewModel.isConnected.value == true && !hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
@@ -1451,7 +1467,7 @@ class DeviceDetailActivity : ComponentActivity() {
         }
 
         // 重置标志，因为 setAdapter 会触发 onItemSelected
-        isInitialSelection = true
+        isProxyInitialSelection = true
     }
 
     private fun getDeviceMac(deviceAddress: Int): String? {

@@ -37,7 +37,6 @@ import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
 import com.example.ble_device_mesh.data.MeshDevice
 import com.example.ble_device_mesh.data.SchedulerTask
-import kotlin.math.pow
 
 /**
  * 一次性事件包装器，防止 LiveData 的粘性事件问题
@@ -3352,23 +3351,19 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         const val OP_RADAR_NIGHT_HOURS_GET = 0xC307D7
         const val OP_RADAR_NIGHT_HOURS_SET = 0xC407D7
 
-        /** OC6701 Gamma 校正指数 — 数值越大，中高段分配越多分辨率 */
-        const val OC6701_GAMMA = 3.0
+        private val OC6701_BRIGHTNESS_MAP = intArrayOf(
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+            1, 1, 1, 2, 2, 3, 3, 4, 5, 6,
+            8, 9, 10, 12, 13, 15, 17, 19, 21, 23,
+            25, 28, 30, 33, 36, 39, 42, 45, 48, 52,
+            55, 59, 62, 66, 70, 74, 78, 83, 87, 92,
+            96, 100
+        )
 
-        /**
-         * OC6701 亮度映射曲线
-         * 由于 OC6701 升压驱动在 30-40% PWM 以上进入饱和区
-         * （PWM 继续升高但 LED 电流不再显著增加）
-         * 叠加人眼对数感知特性，需用高 Gamma 曲线补偿，
-         * 将更多中高段 UI 值映射到 OC6701 的线性响应区。
-         */
         fun mapBrightnessForOC6701(uiBrightness: Int): Int {
-            if (uiBrightness <= 0) return 0
-            if (uiBrightness >= 100) return 100
-
-            val x = uiBrightness / 100.0
-            val mapped = x.pow(OC6701_GAMMA) * 100
-            return mapped.toInt().coerceIn(0, 100)
+            val clamped = uiBrightness.coerceIn(0, 100)
+            val index = (clamped + 1) / 2
+            return OC6701_BRIGHTNESS_MAP[index]
         }
     }
 }
