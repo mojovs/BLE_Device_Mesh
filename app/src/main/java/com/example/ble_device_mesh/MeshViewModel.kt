@@ -81,6 +81,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 雷达模式状态
         val radarStatusUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)>
         val radarNightDurationUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, duration_x10>
+        val radarNightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(1-100)>
         val radarTimesUpdates = MutableLiveData<Pair<Int, List<Pair<Int, Int>>>>() // Pair<src, List<(hour,min)>>
         val radarNightHoursUpdates = MutableLiveData<Pair<Int, Pair<Int, Int>>>() // Pair<src, Pair<startHour, endHour>>
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
@@ -135,6 +136,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
         // MIUI 兼容：记录上次配网 PDU 写入时间，确保相邻 PDU 间隔足够
         var lastProvisioningWriteTime = 0L
+        var lastMeshWriteTime = 0L
 
         // 用户配网配置
         var provisionConfig: ProvisionConfig? = null
@@ -411,6 +413,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     MeshState.buzzerVolumeUpdates.postValue(Pair(src, level))
                     // 同步更新雷达夜晚时长（可能是 Element 4 回复）
                     MeshState.radarNightDurationUpdates.postValue(Pair(src, level))
+                    // 同步更新雷达夜晚亮灯亮度（可能是 Element 5 回复）
+                    MeshState.radarNightBrightnessUpdates.postValue(Pair(src, level))
                 } else if (meshMessage is VendorModelMessageStatus) {
                     val data = meshMessage.parameters
                     Log.d("MeshApp", "收到 VendorModelMessageStatus (Src: 0x${src.toString(16)}): opCode=0x${meshMessage.opCode.toString(16)}, data=${data?.joinToString("") { "%02X".format(it) }}")
@@ -632,13 +636,22 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     return
                 }
 
-                val success = bleConnection.sendData(pdu)
-                if (success) {
-                    Log.d("MeshApp", "PDU 已发送到设备")
-                } else {
-                    Log.e("MeshApp", "PDU 发送失败")
-                    statusText.postValue("PDU 发送失败")
-                }
+                val pduCopy = pdu.clone()
+                val now = System.currentTimeMillis()
+                val elapsed = now - MeshState.lastMeshWriteTime
+                val delay = if (MeshState.lastMeshWriteTime == 0L) 0L else maxOf(300 - elapsed, 0L)
+                MeshState.lastMeshWriteTime = now + delay
+                MeshState.mainHandler.postDelayed({
+                    val success = bleConnection.sendData(pduCopy, forceReliable = false)
+                    if (success) {
+                        Log.d("MeshApp", "PDU 已发送到设备")
+                    } else {
+                        Log.e("MeshApp", "PDU 发送失败")
+                        statusText.postValue("PDU 发送失败")
+                    }
+                    val mtu = MeshState.bleConnection.mtuSize
+                    MeshState.meshManagerApi.handleWriteCallbacks(mtu, pduCopy)
+                }, delay)
             }
 
             override fun getMtu(): Int {
@@ -1013,7 +1026,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 MeshState.pendingSchedulerSetAddress = -1
                 MeshState.pendingSchedulerSetIndex = -1
             } else {
-                MeshState.statusText.postValue("已收到设备 0x${src.toString(16)} 的调度状态")
+                val setIndexes = (0..15).filter { (schedules and (1 shl it)) != 0 }
+                if (setIndexes.isEmpty()) {
+                    MeshState.statusText.postValue("设备 0x${src.toString(16)} 暂无定时任务")
+                } else {
+                    MeshState.statusText.postValue("已收到设备 0x${src.toString(16)} 的调度状态，正在读取 ${setIndexes.size} 个任务详情")
+                    setIndexes.forEachIndexed { readIndex, schedulerIndex ->
+                        MeshState.mainHandler.postDelayed({
+                            readSchedulerAction(src, schedulerIndex)
+                        }, readIndex * 250L)
+                    }
+                }
             }
 
             Log.d("MeshApp", "========================")
@@ -1529,10 +1552,18 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         try {
             val onOffMsg = GenericOnOffGet(appKey)
             MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
-            val levelMsg = GenericLevelGet(appKey)
-            MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
+            MeshState.mainHandler.postDelayed({
+                val levelMsg = GenericLevelGet(appKey)
+                MeshState.meshManagerApi.createMeshPdu(elementAddress, levelMsg)
+            }, 400)
+            MeshState.mainHandler.postDelayed({
+                val brightnessMsg = GenericLevelGet(appKey)
+                MeshState.meshManagerApi.createMeshPdu(elementAddress + 1, brightnessMsg)
+            }, 800)
+            MeshState.statusText.postValue("正在读取雷达配置...")
         } catch (e: Exception) {
             Log.e("MeshApp", "读取雷达配置失败: ${e.message}")
+            MeshState.statusText.postValue("读取雷达配置失败: ${e.message}")
         }
     }
 
@@ -1560,7 +1591,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
-     * 发送夜晚亮灯时长（Element 4 Generic Level）
+     * 发送雷达夜晚亮灯时长（Element 4 Generic Level）
      * @param durationX10 0-200 (0.0-20.0 分钟, ×10)
      */
     fun sendRadarNightDuration(elementAddress: Int, durationX10: Int) {
@@ -1578,6 +1609,28 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             MeshState.statusText.postValue("夜晚亮灯时长: ${v/10.0} 分钟")
         } catch (e: Exception) {
             Log.e("MeshApp", "发送雷达时长失败: ${e.message}")
+            MeshState.statusText.postValue("发送失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发送雷达夜晚亮灯亮度（Element 5 Generic Level）
+     */
+    fun sendRadarNightBrightness(elementAddress: Int, brightness: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        val v = brightness.coerceIn(1, 100)
+        Log.d("MeshApp", "发送雷达夜晚亮度: $v% to 0x${elementAddress.toString(16)}")
+        try {
+            val msg = GenericLevelSetUnacknowledged(appKey, v, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("雷达亮灯亮度: $v%")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送雷达亮度失败: ${e.message}")
             MeshState.statusText.postValue("发送失败: ${e.message}")
         }
     }
@@ -2800,7 +2853,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         node.elements?.forEach { element ->
             element.value.meshModels?.forEach { (modelId, _) ->
                 hasElements = true
-                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206).contains(modelId)) {
+                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206, 0x1207).contains(modelId)) {
                     MeshState.configBindQueue.add(Pair(element.value.elementAddress, modelId))
                 }
             }
@@ -2816,7 +2869,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             // 直接绑定常用模型到主元素地址
             val primaryAddr = address
             Log.w("MeshApp", "节点元素列表为空，使用 fallback 绑定常用模型到 0x${primaryAddr.toString(16)}")
-            val fallbackModels = listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206)
+            val fallbackModels = listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206, 0x1207)
             fallbackModels.forEach { modelId ->
                 MeshState.configBindQueue.add(Pair(primaryAddr, modelId))
             }
@@ -3087,6 +3140,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getBuzzerVolume(): MutableLiveData<Pair<Int, Int>> = MeshState.buzzerVolumeUpdates
     fun getRadarStatus(): MutableLiveData<Pair<Int, Int>> = MeshState.radarStatusUpdates
     fun getRadarNightDuration(): MutableLiveData<Pair<Int, Int>> = MeshState.radarNightDurationUpdates
+    fun getRadarNightBrightness(): MutableLiveData<Pair<Int, Int>> = MeshState.radarNightBrightnessUpdates
     fun getRadarTimes(): MutableLiveData<Pair<Int, List<Pair<Int, Int>>>> = MeshState.radarTimesUpdates
     fun getRadarNightHours(): MutableLiveData<Pair<Int, Pair<Int, Int>>> = MeshState.radarNightHoursUpdates
 

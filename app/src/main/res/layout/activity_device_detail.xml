@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#FAF5F0"
-    android:fitsSystemWindows="true">
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#FAF5F0"
+        android:fitsSystemWindows="true">
 
     <!-- 顶部工具栏 -->
     <LinearLayout
@@ -1559,20 +1563,12 @@
                                 android:progress="30" />
                         </LinearLayout>
 
-                        <!-- 夜晚时段 -->
+                        <!-- 雷达亮灯亮度 -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical"
                             android:layout_marginTop="16dp">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="夜晚时段"
-                                android:textSize="14sp"
-                                android:textColor="#333333"
-                                android:layout_marginBottom="8dp" />
 
                             <LinearLayout
                                 android:layout_width="match_parent"
@@ -1580,31 +1576,79 @@
                                 android:orientation="horizontal"
                                 android:gravity="center_vertical">
 
-                                <NumberPicker
-                                    android:id="@+id/pickerRadarNightStart"
+                                <TextView
                                     android:layout_width="0dp"
                                     android:layout_height="wrap_content"
-                                    android:layout_weight="1" />
+                                    android:layout_weight="1"
+                                    android:text="雷达亮灯亮度"
+                                    android:textSize="14sp"
+                                    android:textColor="#333333" />
+
+                                <TextView
+                                    android:id="@+id/tvRadarBrightness"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="80%"
+                                    android:textSize="14sp"
+                                    android:textColor="#4CAF50"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <SeekBar
+                                android:id="@+id/seekBarRadarBrightness"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:max="100"
+                                android:progress="80" />
+                        </LinearLayout>
+
+                        <!-- 夜晚时段 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="16dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="夜晚时段"
+                                    android:textSize="14sp"
+                                    android:textColor="#333333" />
+
+                                <Button
+                                    android:id="@+id/btnRadarNightStart"
+                                    android:layout_width="72dp"
+                                    android:layout_height="36dp"
+                                    android:text="18:00"
+                                    android:textSize="13sp"
+                                    android:backgroundTint="#E8F5E9"
+                                    android:textColor="#4CAF50" />
 
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text=":00  —  "
+                                    android:layout_marginStart="8dp"
+                                    android:layout_marginEnd="8dp"
+                                    android:text="—"
                                     android:textSize="16sp"
-                                    android:textColor="#333333" />
+                                    android:textColor="#666666" />
 
-                                <NumberPicker
-                                    android:id="@+id/pickerRadarNightEnd"
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="1" />
-
-                                <TextView
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text=":00"
-                                    android:textSize="16sp"
-                                    android:textColor="#333333" />
+                                <Button
+                                    android:id="@+id/btnRadarNightEnd"
+                                    android:layout_width="72dp"
+                                    android:layout_height="36dp"
+                                    android:text="06:00"
+                                    android:textSize="13sp"
+                                    android:backgroundTint="#E8F5E9"
+                                    android:textColor="#4CAF50" />
                             </LinearLayout>
                         </LinearLayout>
 
@@ -1871,4 +1915,44 @@
 
     </ScrollView>
 
-</LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/timeSyncOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="#FFFFFF"
+            android:elevation="8dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp">
+
+            <ProgressBar
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:indeterminate="true" />
+
+            <TextView
+                android:id="@+id/tvTimeSyncOverlayStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="正在同步时间..."
+                android:textColor="#2D2D2D"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+    </FrameLayout>
+
+</FrameLayout>

@@ -332,7 +332,7 @@ class StreetlightModeActivity : ComponentActivity() {
         }
 
         // 下发新的控制点
-        val tasks = profile.toSchedulerTasks()
+        val tasks = profile.toSchedulerTasks(MeshViewModel.Companion::mapBrightnessForOC6701)
         tasks.forEach { task ->
             viewModel.setSchedulerTask(deviceAddress, task)
         }

@@ -18,7 +18,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ProgressBar
-import android.widget.NumberPicker
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -35,6 +34,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.GroupRepository
 import com.example.ble_device_mesh.data.MeshDevice
 import com.example.ble_device_mesh.data.MeshGroup
+import com.example.ble_device_mesh.data.SchedulerRepository
+import com.example.ble_device_mesh.data.SchedulerTask
 
 class DeviceDetailActivity : ComponentActivity() {
 
@@ -43,7 +44,14 @@ class DeviceDetailActivity : ComponentActivity() {
     private lateinit var scanAdapter: DeviceAdapter
     private val deviceRepository by lazy { com.example.ble_device_mesh.data.DeviceRepository(this) }
     private val groupRepository by lazy { GroupRepository(this) }
+    private val schedulerRepository by lazy { SchedulerRepository(this) }
+    private val schedulerReadTasks = mutableMapOf<Int, SchedulerTask>()
+    private val pendingSchedulerIndexes = mutableSetOf<Int>()
     private var isInitialSelection = true  // 标记是否是初始化时的选择
+    private val timeSyncHandler = Handler(Looper.getMainLooper())
+    private var timeSyncTimeoutRunnable: Runnable? = null
+    private var isTimeSyncInProgress = false
+    private var hasSyncedTimeForConnection = false
 
     // 亮度拖动节流
     private val brightnessHandler = Handler(Looper.getMainLooper())
@@ -97,6 +105,7 @@ class DeviceDetailActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        timeSyncTimeoutRunnable?.let { timeSyncHandler.removeCallbacks(it) }
         stopTargetMonitoring()
     }
     
@@ -566,8 +575,7 @@ class DeviceDetailActivity : ComponentActivity() {
         
         btnSyncTime.setOnClickListener {
             if (viewModel.isConnected.value == true) {
-                viewModel.setDeviceTime(device.address)
-                Toast.makeText(this, "正在同步时间到设备...", Toast.LENGTH_SHORT).show()
+                startTimeSync()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }
@@ -609,13 +617,11 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnConnect.text = "断开"
                 btnConnect.visibility = View.VISIBLE
                 btnAutoConnect.visibility = View.GONE
-                btnRefreshTemp.isEnabled = true
-                btnRefreshLightLevel.isEnabled = true
-                btnReadTime.isEnabled = true
-                btnSyncTime.isEnabled = true
-                btnRebindAppKey.isEnabled = true
-                findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
-                spinnerProxyAddress.isEnabled = false
+                updateOperationEnabled(connected = true)
+
+                if (!hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
+                    startTimeSync()
+                }
 
                 // 连接成功后蜂鸣器响一声提示
                 Handler(Looper.getMainLooper()).postDelayed({
@@ -628,14 +634,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnConnect.text = "断开"
                 btnConnect.visibility = View.GONE
                 btnAutoConnect.visibility = View.VISIBLE
-                btnAutoConnect.isEnabled = true
-                btnRefreshTemp.isEnabled = false
-                btnRefreshLightLevel.isEnabled = false
-                btnReadTime.isEnabled = false
-                btnSyncTime.isEnabled = false
-                btnRebindAppKey.isEnabled = false
-                findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = false
-                spinnerProxyAddress.isEnabled = true
+                hasSyncedTimeForConnection = false
+                finishTimeSync(showToast = false)
+                updateOperationEnabled(connected = false)
 
                 // 刷新 Spinner 列表（可能有新的历史记录）
                 isInitialSelection = true  // 重置标志，避免自动触发连接
@@ -652,6 +653,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 if (index >= 0) {
                     isInitialSelection = true  // 防止触发自动连接
                     spinnerProxyAddress.setSelection(index)
+                }
+                if (viewModel.isConnected.value == true && !hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
+                    startTimeSync()
                 }
             }
         }
@@ -684,6 +688,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 // 更新设备对象
                 device.deviceTime = unixTime
                 deviceRepository.updateDevice(device)
+                if (isTimeSyncInProgress) {
+                    finishTimeSync(showToast = true)
+                }
             }
         }
 
@@ -734,16 +741,97 @@ class DeviceDetailActivity : ComponentActivity() {
             btnConnect.text = "断开"
             btnConnect.visibility = View.VISIBLE
             findViewById<Button>(R.id.btnAutoConnect).visibility = View.GONE
-            findViewById<Button>(R.id.btnRefreshTemp).isEnabled = true
-            findViewById<Button>(R.id.btnRefreshLightLevel).isEnabled = true
-            findViewById<Button>(R.id.btnReadTime).isEnabled = true
-            findViewById<Button>(R.id.btnSyncTime).isEnabled = true
-            findViewById<Button>(R.id.btnRebindAppKey).isEnabled = true
-            findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = true
-            findViewById<Spinner>(R.id.spinnerProxyAddress).isEnabled = false
+            updateOperationEnabled(connected = true)
+            if (!hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
+                startTimeSync()
+            }
         }
     }
     
+    private fun isConnectedToPageDevice(): Boolean {
+        val pageDeviceMac = getDeviceMac(device.address) ?: return false
+        val connectedMac = viewModel.connectedDeviceAddress.value ?: return false
+        return connectedMac.equals(pageDeviceMac, ignoreCase = true)
+    }
+
+    private fun startTimeSync() {
+        if (isTimeSyncInProgress) return
+        if (viewModel.isConnected.value != true) return
+        if (!isConnectedToPageDevice()) {
+            viewModel.statusText.postValue("当前连接的不是本页面设备，跳过时间同步")
+            return
+        }
+
+        isTimeSyncInProgress = true
+        hasSyncedTimeForConnection = true
+        findViewById<FrameLayout>(R.id.timeSyncOverlay).visibility = View.VISIBLE
+        findViewById<TextView>(R.id.tvTimeSyncOverlayStatus).text = "正在同步时间..."
+        updateOperationEnabled(connected = true)
+        viewModel.setDeviceTime(device.address)
+        Toast.makeText(this, "正在同步时间到设备...", Toast.LENGTH_SHORT).show()
+
+        timeSyncTimeoutRunnable?.let { timeSyncHandler.removeCallbacks(it) }
+        timeSyncTimeoutRunnable = Runnable {
+            if (isTimeSyncInProgress) {
+                finishTimeSync(showToast = false)
+                viewModel.statusText.postValue("时间同步超时，可手动重试")
+                Toast.makeText(this, "时间同步超时，可手动重试", Toast.LENGTH_SHORT).show()
+            }
+        }
+        timeSyncHandler.postDelayed(timeSyncTimeoutRunnable!!, 5000)
+    }
+
+    private fun finishTimeSync(showToast: Boolean) {
+        timeSyncTimeoutRunnable?.let { timeSyncHandler.removeCallbacks(it) }
+        timeSyncTimeoutRunnable = null
+        isTimeSyncInProgress = false
+        findViewById<FrameLayout>(R.id.timeSyncOverlay).visibility = View.GONE
+        updateOperationEnabled(connected = viewModel.isConnected.value == true)
+        if (showToast) {
+            Toast.makeText(this, "时间同步完成", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateOperationEnabled(connected: Boolean) {
+        val enabled = connected && !isTimeSyncInProgress
+        findViewById<Button>(R.id.btnScanProxy).isEnabled = !connected && !isTimeSyncInProgress
+        findViewById<Button>(R.id.btnConnect).isEnabled = enabled
+        findViewById<Button>(R.id.btnAutoConnect).isEnabled = !connected && !isTimeSyncInProgress
+        findViewById<Spinner>(R.id.spinnerProxyAddress).isEnabled = !connected && !isTimeSyncInProgress
+        findViewById<Spinner>(R.id.spinnerGroupSelect).isEnabled = enabled
+        findViewById<Button>(R.id.btnCreateGroup).isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarBrightness).isEnabled = enabled
+        findViewById<Button>(R.id.btnBrightnessDown).isEnabled = enabled
+        findViewById<Button>(R.id.btnBrightnessUp).isEnabled = enabled
+        findViewById<Button>(R.id.btnRefreshTemp).isEnabled = enabled
+        findViewById<Button>(R.id.btnRefreshLightLevel).isEnabled = enabled
+        findViewById<Button>(R.id.btnReadTime).isEnabled = enabled
+        findViewById<Button>(R.id.btnSyncTime).isEnabled = enabled
+        findViewById<Button>(R.id.btnRebindAppKey).isEnabled = enabled
+        findViewById<Button>(R.id.btnReadScheduler)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnSchedulerManager)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnStreetlightMode)?.isEnabled = enabled
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarAutoLightThreshold)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarAutoLightBrightness)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnReadAutoLight)?.isEnabled = enabled
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchBuzzerChime)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarBuzzerVolume)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnTestBuzzer)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnReadBuzzer)?.isEnabled = enabled
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarRadarDuration)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekBarRadarBrightness)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnRadarNightStart)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnRadarNightEnd)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnRadarReadTimes)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnRadarReadConfig)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekbarTransmitCount)?.isEnabled = enabled
+        findViewById<SeekBar>(R.id.seekbarTransmitInterval)?.isEnabled = enabled
+        findViewById<Button>(R.id.btnSaveRelay)?.isEnabled = enabled
+        findViewById<TextView>(R.id.btnNodeReset).isEnabled = enabled
+    }
+
     private fun observeViewModel() {
         // 确保 RSSI 轮询已启动（处理重入场景）
         viewModel.ensureRssiUpdates()
@@ -771,8 +859,10 @@ class DeviceDetailActivity : ComponentActivity() {
             Log.d("DeviceDetail", "读取计划按钮被点击")
             if (viewModel.isConnected.value == true) {
                 Log.d("DeviceDetail", "设备已连接，开始读取计划")
-                viewModel.readScheduler(device.address)
-                tvSchedulerStatus.text = "读取中..."
+                schedulerReadTasks.clear()
+                pendingSchedulerIndexes.clear()
+                viewModel.readAllSchedulerTasks(device.address)
+                tvSchedulerStatus.text = "正在读取计划..."
                 tvSchedulerDetails.visibility = View.GONE
             } else {
                 Log.w("DeviceDetail", "设备未连接，无法读取计划")
@@ -783,58 +873,49 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察 Scheduler 状态更新
         viewModel.schedulerUpdates.observe(this) { (address, schedules) ->
             if (address == device.address) {
-                val setIndexes = mutableListOf<Int>()
-                for (i in 0..15) {
-                    if ((schedules and (1 shl i)) != 0) {
-                        setIndexes.add(i)
-                    }
-                }
+                val setIndexes = (0..15).filter { (schedules and (1 shl it)) != 0 }
+                pendingSchedulerIndexes.clear()
+                pendingSchedulerIndexes.addAll(setIndexes)
+                schedulerReadTasks.keys.retainAll(setIndexes.toSet())
 
                 if (setIndexes.isEmpty()) {
-                    tvSchedulerStatus.text = "无计划"
+                    tvSchedulerStatus.text = "设备暂无定时任务"
                     tvSchedulerDetails.visibility = View.GONE
                 } else {
-                    tvSchedulerStatus.text = "读取中... (${setIndexes.size} 个计划)"
-                    tvSchedulerDetails.text = "计划索引: ${setIndexes.joinToString(", ")}"
+                    tvSchedulerStatus.text = "正在读取 ${setIndexes.size} 个任务详情..."
+                    tvSchedulerDetails.text = "计划索引: ${setIndexes.joinToString(", ") { "#$it" }}"
                     tvSchedulerDetails.visibility = View.VISIBLE
+                    updateSchedulerTaskDetails(tvSchedulerStatus, tvSchedulerDetails)
                 }
             }
         }
 
         // 观察 Scheduler Action 详情更新
-        viewModel.schedulerActionUpdates.observe(this) { (address, index, action) ->
-            if (address == device.address) {
-                // 解析时间和动作
-                val hour = action.hour
-                val minute = action.minute
-                val dayOfWeek = action.dayOfWeek
-                val actionType = action.action // 0=关, 1=开, 2=场景回调
-
-                val timeStr = String.format("%02d:%02d", hour, minute)
-                val repeatStr = when {
-                    dayOfWeek == 0x7F -> "每天"
-                    dayOfWeek == 0x00 -> "单次"
-                    else -> {
-                        val days = mutableListOf<String>()
-                        if ((dayOfWeek and 0x01) != 0) days.add("一")
-                        if ((dayOfWeek and 0x02) != 0) days.add("二")
-                        if ((dayOfWeek and 0x04) != 0) days.add("三")
-                        if ((dayOfWeek and 0x08) != 0) days.add("四")
-                        if ((dayOfWeek and 0x10) != 0) days.add("五")
-                        if ((dayOfWeek and 0x20) != 0) days.add("六")
-                        if ((dayOfWeek and 0x40) != 0) days.add("日")
-                        "周${days.joinToString(",")}"
-                    }
-                }
-
-                // 更新状态显示
-                val currentStatus = tvSchedulerStatus.text.toString()
-                if (currentStatus.contains("读取中")) {
-                    tvSchedulerStatus.text = "已读取计划详情"
-                }
-
-                Toast.makeText(this, "计划 #$index: $timeStr ($repeatStr) - ${if (actionType == 1) "开灯" else "关灯"}", Toast.LENGTH_SHORT).show()
+        viewModel.schedulerTaskUpdates.observe(this) { task ->
+            if (task.deviceAddress == device.address || task.deviceAddress == 0) {
+                val updatedTask = task.copy(deviceAddress = device.address)
+                schedulerReadTasks[updatedTask.index] = updatedTask
+                pendingSchedulerIndexes.remove(updatedTask.index)
+                schedulerRepository.upsertTask(device.address, updatedTask)
+                updateSchedulerTaskDetails(tvSchedulerStatus, tvSchedulerDetails)
             }
+        }
+    }
+
+    private fun updateSchedulerTaskDetails(tvSchedulerStatus: TextView, tvSchedulerDetails: TextView) {
+        if (schedulerReadTasks.isEmpty()) return
+
+        val tasks = schedulerReadTasks.values.sortedBy { it.index }
+        tvSchedulerDetails.text = tasks.joinToString("\n") { task ->
+            val enabledText = if (task.enabled) "已启用" else "已禁用"
+            "#${task.index} ${task.getTimeString()} ${task.getRepeatDescription()} ${task.getActionDescription()} $enabledText"
+        }
+        tvSchedulerDetails.visibility = View.VISIBLE
+
+        tvSchedulerStatus.text = if (pendingSchedulerIndexes.isEmpty()) {
+            "已读取 ${tasks.size} 个任务"
+        } else {
+            "已读取 ${tasks.size} 个任务，等待 ${pendingSchedulerIndexes.size} 个详情..."
         }
     }
 
@@ -942,10 +1023,10 @@ class DeviceDetailActivity : ComponentActivity() {
 
         // 连接状态改变时更新按钮启用
         viewModel.isConnected.observe(this) { connected ->
-            btnRead.isEnabled = connected
-            switchAutoLight.isEnabled = connected
-            seekBarThreshold.isEnabled = connected
-            seekBarBrightness.isEnabled = connected
+            btnRead.isEnabled = connected && !isTimeSyncInProgress
+            switchAutoLight.isEnabled = connected && !isTimeSyncInProgress
+            seekBarThreshold.isEnabled = connected && !isTimeSyncInProgress
+            seekBarBrightness.isEnabled = connected && !isTimeSyncInProgress
         }
     }
 
@@ -1052,10 +1133,10 @@ class DeviceDetailActivity : ComponentActivity() {
 
         // 连接状态改变时更新按钮启用
         viewModel.isConnected.observe(this) { connected ->
-            btnTest.isEnabled = connected
-            btnRead.isEnabled = connected
-            switchChime.isEnabled = connected
-            seekBarVolume.isEnabled = connected
+            btnTest.isEnabled = connected && !isTimeSyncInProgress
+            btnRead.isEnabled = connected && !isTimeSyncInProgress
+            switchChime.isEnabled = connected && !isTimeSyncInProgress
+            seekBarVolume.isEnabled = connected && !isTimeSyncInProgress
         }
     }
 
@@ -1073,29 +1154,42 @@ class DeviceDetailActivity : ComponentActivity() {
         val switchEnable = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)
         val seekBarDuration = findViewById<SeekBar>(R.id.seekBarRadarDuration)
         val tvDuration = findViewById<TextView>(R.id.tvRadarDuration)
-        val pickerStart = findViewById<NumberPicker>(R.id.pickerRadarNightStart)
-        val pickerEnd = findViewById<NumberPicker>(R.id.pickerRadarNightEnd)
+        val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarRadarBrightness)
+        val tvBrightness = findViewById<TextView>(R.id.tvRadarBrightness)
+        val btnStart = findViewById<Button>(R.id.btnRadarNightStart)
+        val btnEnd = findViewById<Button>(R.id.btnRadarNightEnd)
         val tvTimes = findViewById<TextView>(R.id.tvRadarTimes)
         val btnReadTimes = findViewById<Button>(R.id.btnRadarReadTimes)
         val btnReadConfig = findViewById<Button>(R.id.btnRadarReadConfig)
 
         val radarRepo = com.example.ble_device_mesh.data.RadarDetectionRepository(applicationContext)
         val elem4Addr = device.address + 4  // 雷达 Element 地址
+        val elem5Addr = device.address + 5  // 雷达亮灯亮度 Element 地址
 
-        // 配置 NumberPicker
-        pickerStart.minValue = 0
-        pickerStart.maxValue = 23
-        pickerStart.wrapSelectorWheel = false
-        pickerEnd.minValue = 0
-        pickerEnd.maxValue = 23
-        pickerEnd.wrapSelectorWheel = false
+        fun updateNightHourButtons(start: Int, end: Int) {
+            btnStart.text = "%02d:00".format(start.coerceIn(0, 23))
+            btnEnd.text = "%02d:00".format(end.coerceIn(0, 23))
+        }
+
+        fun showRadarNightHourDialog(title: String, current: Int, onSelected: (Int) -> Unit) {
+            val values = Array(24) { "%02d:00".format(it) }
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setSingleChoiceItems(values, current.coerceIn(0, 23)) { dialog, which ->
+                    onSelected(which)
+                    dialog.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
 
         // 默认状态
         switchEnable.isChecked = device.radarEnabled
         seekBarDuration.progress = device.radarNightDurationX10.coerceIn(0, 200)
         tvDuration.text = "%.1f 分钟".format(device.radarNightDurationX10 / 10.0)
-        pickerStart.value = device.radarNightStartHour.coerceIn(0, 23)
-        pickerEnd.value = device.radarNightEndHour.coerceIn(0, 23)
+        seekBarBrightness.progress = device.radarNightBrightness.coerceIn(1, 100)
+        tvBrightness.text = "${device.radarNightBrightness.coerceIn(1, 100)}%"
+        updateNightHourButtons(device.radarNightStartHour, device.radarNightEndHour)
 
         // 显示本地已有记录数
         val localRecords = radarRepo.getRecords(device.address)
@@ -1116,6 +1210,24 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         })
 
+        // 亮度滑块
+        seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val brightness = progress.coerceAtLeast(1)
+                tvBrightness.text = "$brightness%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val brightness = seekBarBrightness.progress.coerceAtLeast(1)
+                seekBarBrightness.progress = brightness
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendRadarNightBrightness(elem5Addr, brightness)
+                    device.radarNightBrightness = brightness
+                    deviceRepository.updateDevice(device)
+                }
+            }
+        })
+
         // 启用开关
         switchEnable.setOnCheckedChangeListener { _, isChecked ->
             if (viewModel.isConnected.value == true) {
@@ -1125,25 +1237,29 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
-        // 夜晚时段 NumberPicker 值变化
-        pickerStart.setOnValueChangedListener { _, _, _ ->
-            val start = pickerStart.value
-            val end = pickerEnd.value
-            if (viewModel.isConnected.value == true) {
-                viewModel.sendRadarNightHoursSet(elem4Addr, start, end)
-                device.radarNightStartHour = start
-                device.radarNightEndHour = end
-                deviceRepository.updateDevice(device)
+        // 夜晚时段选择
+        btnStart.setOnClickListener {
+            showRadarNightHourDialog("开始时间", device.radarNightStartHour) { selected ->
+                val end = device.radarNightEndHour.coerceIn(0, 23)
+                updateNightHourButtons(selected, end)
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendRadarNightHoursSet(elem4Addr, selected, end)
+                    device.radarNightStartHour = selected
+                    device.radarNightEndHour = end
+                    deviceRepository.updateDevice(device)
+                }
             }
         }
-        pickerEnd.setOnValueChangedListener { _, _, _ ->
-            val start = pickerStart.value
-            val end = pickerEnd.value
-            if (viewModel.isConnected.value == true) {
-                viewModel.sendRadarNightHoursSet(elem4Addr, start, end)
-                device.radarNightStartHour = start
-                device.radarNightEndHour = end
-                deviceRepository.updateDevice(device)
+        btnEnd.setOnClickListener {
+            showRadarNightHourDialog("结束时间", device.radarNightEndHour) { selected ->
+                val start = device.radarNightStartHour.coerceIn(0, 23)
+                updateNightHourButtons(start, selected)
+                if (viewModel.isConnected.value == true) {
+                    viewModel.sendRadarNightHoursSet(elem4Addr, start, selected)
+                    device.radarNightStartHour = start
+                    device.radarNightEndHour = selected
+                    deviceRepository.updateDevice(device)
+                }
             }
         }
 
@@ -1161,7 +1277,9 @@ class DeviceDetailActivity : ComponentActivity() {
         btnReadConfig.setOnClickListener {
             if (viewModel.isConnected.value == true) {
                 viewModel.readRadarConfig(elem4Addr)
-                viewModel.sendRadarNightHoursGet(elem4Addr)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    viewModel.sendRadarNightHoursGet(elem4Addr)
+                }, 900)
                 Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
@@ -1188,6 +1306,17 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
+        // 观察雷达亮灯亮度
+        viewModel.getRadarNightBrightness().observe(this) { (src, brightness) ->
+            if (src == elem5Addr) {
+                val b = brightness.coerceIn(1, 100)
+                seekBarBrightness.progress = b
+                tvBrightness.text = "$b%"
+                device.radarNightBrightness = b
+                deviceRepository.updateDevice(device)
+            }
+        }
+
         // 观察检测时间列表（固件当天记录）
         viewModel.getRadarTimes().observe(this) { (src, times) ->
             if (src == elem4Addr) {
@@ -1208,8 +1337,7 @@ class DeviceDetailActivity : ComponentActivity() {
             if (src == elem4Addr) {
                 val startH = hours.first.coerceIn(0, 23)
                 val endH = hours.second.coerceIn(0, 23)
-                pickerStart.value = startH
-                pickerEnd.value = endH
+                updateNightHourButtons(startH, endH)
                 device.radarNightStartHour = startH
                 device.radarNightEndHour = endH
                 deviceRepository.updateDevice(device)
@@ -1218,12 +1346,13 @@ class DeviceDetailActivity : ComponentActivity() {
 
         // 连接状态改变时更新按钮启用
         viewModel.isConnected.observe(this) { connected ->
-            btnReadTimes.isEnabled = connected
-            btnReadConfig.isEnabled = connected
-            switchEnable.isEnabled = connected
-            seekBarDuration.isEnabled = connected
-            pickerStart.isEnabled = connected
-            pickerEnd.isEnabled = connected
+            btnReadTimes.isEnabled = connected && !isTimeSyncInProgress
+            btnReadConfig.isEnabled = connected && !isTimeSyncInProgress
+            switchEnable.isEnabled = connected && !isTimeSyncInProgress
+            seekBarDuration.isEnabled = connected && !isTimeSyncInProgress
+            seekBarBrightness.isEnabled = connected && !isTimeSyncInProgress
+            btnStart.isEnabled = connected && !isTimeSyncInProgress
+            btnEnd.isEnabled = connected && !isTimeSyncInProgress
         }
     }
 

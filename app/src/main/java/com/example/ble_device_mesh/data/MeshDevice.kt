@@ -23,6 +23,7 @@ data class MeshDevice(
     var buzzerVolume: Int = 50,  // 蜂鸣器音量 0-100
     var radarEnabled: Boolean = false,  // 雷达检测开关
     var radarNightDurationX10: Int = 30,  // 夜晚亮灯时长 (×0.1分钟), 默认3.0分钟
+    var radarNightBrightness: Int = 80,  // 雷达夜晚亮灯亮度 1-100
     var radarNightStartHour: Int = 18,  // 夜晚开始小时
     var radarNightEndHour: Int = 6  // 夜晚结束小时
 ) : Parcelable

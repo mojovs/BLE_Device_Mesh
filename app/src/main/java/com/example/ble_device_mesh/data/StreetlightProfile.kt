@@ -52,7 +52,7 @@ data class StreetlightProfile(
      * 将控制点转换为 SchedulerTask 列表
      * 路灯模式占用槽位 0-7，每个控制点占用一个槽位
      */
-    fun toSchedulerTasks(): List<SchedulerTask> {
+    fun toSchedulerTasks(brightnessMapper: (Int) -> Int = { it }): List<SchedulerTask> {
         return controlPoints.mapIndexed { index, point ->
             SchedulerTask(
                 index = index.coerceIn(0, 7),  // 槽位 0-7
@@ -60,7 +60,7 @@ data class StreetlightProfile(
                 minute = point.minute,
                 second = 0,
                 action = SchedulerTask.Action.STREETLIGHT,
-                brightness = point.brightness.coerceIn(0, 100),
+                brightness = brightnessMapper(point.brightness.coerceIn(0, 100)).coerceIn(0, 100),
                 repeat = 0x7F,  // 每天
                 enabled = this.enabled,
                 year = 0,

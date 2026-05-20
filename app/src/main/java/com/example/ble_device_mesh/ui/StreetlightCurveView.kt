@@ -200,10 +200,17 @@ class StreetlightCurveView @JvmOverloads constructor(
      * 绘制网格
      */
     private fun drawGrid(canvas: Canvas) {
-        // 垂直网格线（每小时）
-        for (hour in 0..24) {
-            val x = paddingLeft + (hour / 24f) * chartWidth
-            canvas.drawLine(x, paddingTop, x, height - paddingBottom, gridPaint)
+        // 垂直网格线（随缩放后的可见时长动态调整）
+        val tickInterval = getTimeTickIntervalMinutes()
+        val firstTick = (rangeStartMinutes / tickInterval) * tickInterval
+        val endMinutes = rangeStartMinutes + visibleDurationMinutes
+        var tick = firstTick
+        while (tick <= endMinutes + tickInterval) {
+            val x = paddingLeft + ((tick - rangeStartMinutes) / visibleDurationMinutes) * chartWidth
+            if (x in paddingLeft..(width - paddingRight)) {
+                canvas.drawLine(x, paddingTop, x, height - paddingBottom, gridPaint)
+            }
+            tick += tickInterval
         }
 
         // 水平网格线（每 20%）
@@ -281,15 +288,22 @@ class StreetlightCurveView @JvmOverloads constructor(
      */
     private fun drawLabels(canvas: Canvas) {
         // X轴标签（时间，根据 rangeStartMinutes 偏移）
-        for (hour in 0..24 step 2) {
-            val x = paddingLeft + (hour / 24f) * chartWidth
-            val labelHour = ((rangeStartMinutes / 60) + hour) % 24
-            canvas.drawText(
-                "$labelHour",
-                x - 10,
-                height - paddingBottom + 40,
-                textPaint
-            )
+        val tickInterval = getTimeTickIntervalMinutes()
+        val firstTick = (rangeStartMinutes / tickInterval) * tickInterval
+        val endMinutes = rangeStartMinutes + visibleDurationMinutes
+        var tick = firstTick
+        while (tick <= endMinutes + tickInterval) {
+            val x = paddingLeft + ((tick - rangeStartMinutes) / visibleDurationMinutes) * chartWidth
+            if (x in paddingLeft..(width - paddingRight)) {
+                val labelHour = ((tick / 60) % 24 + 24) % 24
+                canvas.drawText(
+                    "$labelHour",
+                    x - 10,
+                    height - paddingBottom + 40,
+                    textPaint
+                )
+            }
+            tick += tickInterval
         }
         val xTitle = if (nightModeEnabled) "时间(时) · 夜间" else "时间(时)"
         canvas.drawText(xTitle, width / 2f - 40, height - 20f, labelPaint)
@@ -734,6 +748,14 @@ class StreetlightCurveView @JvmOverloads constructor(
         rangeStartMinutes = normalizeStartMinutes((rangeStartMinutes + deltaMinutes).roundToInt())
         Log.d(TAG, "pan deltaX=$deltaX, deltaMinutes=$deltaMinutes, newStart=$rangeStartMinutes")
         invalidate()
+    }
+
+    private fun getTimeTickIntervalMinutes(): Int {
+        return when {
+            visibleDurationMinutes <= 240f -> 30
+            visibleDurationMinutes <= 720f -> 60
+            else -> 120
+        }
     }
 
     /**
