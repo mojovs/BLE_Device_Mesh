@@ -59,7 +59,7 @@ class DeviceDetailActivity : ComponentActivity() {
     // 亮度拖动节流
     private val brightnessHandler = Handler(Looper.getMainLooper())
     private var lastBrightnessSendTime = 0L
-    private val brightnessThrottleMs = 50L
+    private val brightnessThrottleMs = 120L
     private var pendingBrightness = -1  // 暂存的亮度值，用于延迟发送
     
     companion object {
@@ -1199,6 +1199,19 @@ class DeviceDetailActivity : ComponentActivity() {
                 .show()
         }
 
+        fun showRadarTimesDialog(times: List<Pair<Int, Int>>) {
+            val message = if (times.isEmpty()) {
+                "当天暂无检测记录"
+            } else {
+                times.joinToString("\n") { "%02d:%02d".format(it.first, it.second) }
+            }
+            AlertDialog.Builder(this)
+                .setTitle("检测到人的时间列表")
+                .setMessage(message)
+                .setPositiveButton("确定", null)
+                .show()
+        }
+
         // 默认状态
         switchEnable.isChecked = device.radarEnabled
         seekBarDuration.progress = device.radarNightDurationX10.coerceIn(0, 200)
@@ -1285,7 +1298,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 viewModel.sendRadarTimesGet(elem4Addr)
                 Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+                val records = radarRepo.getRecords(device.address)
+                val times = records.map { Pair(it.hour, it.minute) }
+                showRadarTimesDialog(times)
             }
         }
 
@@ -1342,6 +1357,7 @@ class DeviceDetailActivity : ComponentActivity() {
                     val timeStr = times.joinToString("\n") { "%02d:%02d".format(it.first, it.second) }
                     tvTimes.text = "当天检测 (${times.size}次):\n$timeStr"
                 }
+                showRadarTimesDialog(times)
                 // 导入到本地持久化
                 val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
                 radarRepo.importDeviceRecords(device.address, today, times)

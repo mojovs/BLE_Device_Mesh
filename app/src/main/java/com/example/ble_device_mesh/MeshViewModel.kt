@@ -638,7 +638,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 val pduCopy = pdu.clone()
                 val now = System.currentTimeMillis()
                 val elapsed = now - MeshState.lastMeshWriteTime
-                val delay = if (MeshState.lastMeshWriteTime == 0L) 0L else maxOf(300 - elapsed, 0L)
+                val delay = if (MeshState.lastMeshWriteTime == 0L) 0L else maxOf(60 - elapsed, 0L)
                 MeshState.lastMeshWriteTime = now + delay
                 MeshState.mainHandler.postDelayed({
                     val success = bleConnection.sendData(pduCopy, forceReliable = false)
@@ -1238,19 +1238,6 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             Log.e("MeshApp", "未找到 App Key")
             return
         }
-
-        // 详细日志：记录控制消息使用的密钥
-        Log.d("MeshApp", "=== 控制消息密钥详情 ===")
-        Log.d("MeshApp", "  AppKey index: ${appKey.keyIndex}")
-        Log.d("MeshApp", "  AppKey bytes: ${appKey.key.joinToString("") { "%02X".format(it) }}")
-        Log.d("MeshApp", "  AppKey boundNetKeyIndex: ${appKey.boundNetKeyIndex}")
-        Log.d("MeshApp", "  AppKey AID: ${appKey.aid}")
-        Log.d("MeshApp", "  目标地址: 0x${address.toString(16)}")
-        Log.d("MeshApp", "  网络 NetKeys: ${network.netKeys.size}")
-        network.netKeys.forEachIndexed { i, nk ->
-            Log.d("MeshApp", "    NetKey[$i]: index=${nk.keyIndex}, key=${nk.key.joinToString("") { "%02X".format(it) }}")
-        }
-        Log.d("MeshApp", "==============================")
 
         // 应用亮度映射曲线，补偿 OC6701 的非线性特性
         val mappedBrightness = mapBrightnessForOC6701(brightness)
@@ -3346,10 +3333,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // Vendor model constants (雷达)
         const val RADAR_CID = 0x07D7
         const val RADAR_VENDOR_MODEL_ID = 0x0002
-        const val OP_RADAR_TIMES_GET = 0xC107D7
-        const val OP_RADAR_TIMES_STATUS = 0xC207D7
-        const val OP_RADAR_NIGHT_HOURS_GET = 0xC307D7
-        const val OP_RADAR_NIGHT_HOURS_SET = 0xC407D7
+        const val OP_RADAR_TIMES_GET = 0x01
+        const val OP_RADAR_TIMES_STATUS = 0x02
+        const val OP_RADAR_NIGHT_HOURS_GET = 0x03
+        const val OP_RADAR_NIGHT_HOURS_SET = 0x04
 
         private val OC6701_BRIGHTNESS_MAP = intArrayOf(
             0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
