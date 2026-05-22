@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     
     private fun setupViews() {
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
+        val tvConnectedDeviceName = findViewById<TextView>(R.id.tvConnectedDeviceName)
         val btnAddDevice = findViewById<Button>(R.id.btnAddDevice)
         val rvDevices = findViewById<RecyclerView>(R.id.rvDevices)
         val layoutEmpty = findViewById<LinearLayout>(R.id.layoutEmpty)
@@ -57,6 +58,10 @@ class MainActivity : ComponentActivity() {
         
 
         
+        findViewById<LinearLayout>(R.id.sceneAllOff).setOnClickListener {
+            sendAllOffScene()
+        }
+
         // 设备列表
         deviceAdapter = MeshDeviceAdapter(
             mutableListOf(),
@@ -140,7 +145,18 @@ class MainActivity : ComponentActivity() {
                 TimeSyncService.start(this)
                 // 连接后立即读取所有设备的温度
                 readAllTemperatures()
+            } else {
+                tvConnectedDeviceName.text = ""
             }
+        }
+
+        viewModel.connectedDeviceAddress.observe(this) { mac ->
+            val deviceName = mac?.let { connectedMac ->
+                deviceRepository.getAllDevices()
+                    .firstOrNull { it.bluetoothMac.equals(connectedMac, ignoreCase = true) }
+                    ?.name
+            }
+            tvConnectedDeviceName.text = deviceName?.let { " · $it" } ?: ""
         }
         
         // 观察温度更新
@@ -175,6 +191,37 @@ class MainActivity : ComponentActivity() {
 
     }
     
+    private fun sendAllOffScene() {
+        if (viewModel.isConnected.value != true) {
+            Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val groups = com.example.ble_device_mesh.data.GroupRepository(this).getAllGroups()
+        if (groups.isNotEmpty()) {
+            groups.forEachIndexed { index, group ->
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    viewModel.sendGroupOnOff(group.address, false)
+                }, index * 80L)
+            }
+            Toast.makeText(this, "已发送全部关闭", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val devices = deviceRepository.getAllDevices()
+        if (devices.isEmpty()) {
+            Toast.makeText(this, "暂无设备", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        devices.forEachIndexed { index, device ->
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                viewModel.sendOnOff(device.address, false)
+            }, index * 80L)
+        }
+        Toast.makeText(this, "已发送全部关闭", Toast.LENGTH_SHORT).show()
+    }
+
     private fun loadDevices() {
         val devices = deviceRepository.getAllDevices()
         deviceAdapter.updateDevices(devices)
@@ -198,11 +245,16 @@ class MainActivity : ComponentActivity() {
     
     private fun tryAutoConnect() {
         if (viewModel.isConnected.value == true) return
-        Log.d("MainActivity", "自动连接已有设备...")
-        viewModel.autoConnectFromHistory(onAllFailed = {
-            Log.d("MainActivity", "历史设备均无法连接，开始扫描...")
-            viewModel.autoConnectToProxy()
-        })
+        val deviceMacs = deviceRepository.getAllDevices()
+            .mapNotNull { it.bluetoothMac?.takeIf { mac -> mac.isNotBlank() } }
+            .distinct()
+        if (deviceMacs.isNotEmpty()) {
+            Log.d("MainActivity", "自动扫描设备卡片并连接信号最强设备: ${deviceMacs.size} 个")
+            viewModel.autoConnectToStrongestProxyInAddresses(deviceMacs)
+        } else {
+            Log.d("MainActivity", "没有设备卡片 MAC，自动扫描并连接信号最强设备...")
+            viewModel.autoConnectToStrongestKnownProxy()
+        }
     }
 
     private fun showAddDeviceDialog() {

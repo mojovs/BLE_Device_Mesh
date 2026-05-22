@@ -68,6 +68,16 @@
                                 android:textColor="#2E7D32"
                                 android:layout_marginStart="4dp" />
 
+                            <TextView
+                                android:id="@+id/tvConnectedDeviceName"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textSize="11sp"
+                                android:textColor="#2E7D32"
+                                android:maxLines="1"
+                                android:ellipsize="end" />
+
                         </LinearLayout>
 
                         <View
@@ -174,6 +184,39 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical">
+
+                        <!-- 全部关闭 -->
+                        <LinearLayout
+                            android:id="@+id/sceneAllOff"
+                            android:layout_width="72dp"
+                            android:layout_height="80dp"
+                            android:orientation="vertical"
+                            android:gravity="center"
+                            android:background="#FFFFFF"
+                            android:elevation="1dp"
+                            android:layout_marginEnd="12dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <TextView
+                                android:layout_width="36dp"
+                                android:layout_height="36dp"
+                                android:gravity="center"
+                                android:text="关"
+                                android:textSize="16sp"
+                                android:textStyle="bold"
+                                android:textColor="#D32F2F"
+                                android:background="#FFEBEE" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="全关"
+                                android:textSize="11sp"
+                                android:textColor="#2D2D2D"
+                                android:layout_marginTop="6dp" />
+
+                        </LinearLayout>
 
                         <!-- 回家模式 -->
                         <LinearLayout

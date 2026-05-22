@@ -1969,6 +1969,134 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         MeshState.scannedDevices.setValue(emptyList())
     }
     
+    fun autoConnectToStrongestProxyInAddresses(addresses: List<String>, scanDurationMs: Long = 3000L) {
+        val targetAddresses = addresses.map { it.uppercase() }.toSet()
+        val candidates = mutableMapOf<String, ScanResult>()
+        MeshState.statusText.postValue("正在扫描设备卡片中信号最强节点...")
+        MeshState.bleScanner.startScan(object : BleScannerManager.ScanListener {
+            override fun onDeviceFound(device: ScanResult) {
+                val address = device.device.address.uppercase()
+                if (address in targetAddresses) {
+                    val current = candidates[address]
+                    if (current == null || device.rssi > current.rssi) {
+                        candidates[address] = device
+                    }
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                MeshState.statusText.postValue("扫描失败: $errorCode")
+            }
+        })
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MeshState.bleScanner.stopScan()
+            updateDeviceOnlineStatusByMac(candidates.keys)
+            val strongest = candidates.values.maxByOrNull { it.rssi }
+            if (strongest != null) {
+                MeshState.statusText.postValue("连接设备卡片中信号最强节点 ${strongest.device.address} (${strongest.rssi}dBm)")
+                connectToDevice(strongest)
+            } else {
+                MeshState.statusText.postValue("未扫描到设备卡片中的 Proxy 节点，尝试历史连接")
+                autoConnectFromHistory(onAllFailed = {
+                    autoConnectToStrongestProxy(scanDurationMs)
+                })
+            }
+        }, scanDurationMs)
+    }
+
+    private fun updateDeviceOnlineStatusByMac(onlineMacs: Set<String>) {
+        try {
+            val repo = DeviceRepository(getApplication())
+            val normalizedOnlineMacs = onlineMacs.map { it.uppercase() }.toSet()
+            var changed = false
+            repo.getAllDevices().forEach { device ->
+                val mac = device.bluetoothMac?.uppercase()
+                val isReachable = mac != null && mac in normalizedOnlineMacs
+                if (device.isOnline != isReachable) {
+                    device.isOnline = isReachable
+                    repo.updateDevice(device)
+                    changed = true
+                }
+            }
+            if (changed) {
+                MeshState.deviceOnlineUpdates.postValue(Unit)
+            }
+        } catch (e: Exception) {
+            Log.e("MeshApp", "更新设备在线状态失败: ${e.message}")
+        }
+    }
+
+    fun autoConnectToStrongestKnownProxy(scanDurationMs: Long = 3000L) {
+        val knownAddresses = getProxyAddressHistory().toSet()
+        if (knownAddresses.isEmpty()) {
+            MeshState.statusText.postValue("没有历史连接记录，正在搜索 Proxy 节点...")
+            autoConnectToStrongestProxy(scanDurationMs)
+            return
+        }
+
+        val candidates = mutableMapOf<String, ScanResult>()
+        MeshState.statusText.postValue("正在扫描信号最强设备...")
+        MeshState.bleScanner.startScan(object : BleScannerManager.ScanListener {
+            override fun onDeviceFound(device: ScanResult) {
+                val address = device.device.address
+                if (address in knownAddresses) {
+                    val current = candidates[address]
+                    if (current == null || device.rssi > current.rssi) {
+                        candidates[address] = device
+                    }
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                MeshState.statusText.postValue("扫描失败: $errorCode")
+            }
+        })
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MeshState.bleScanner.stopScan()
+            val strongest = candidates.values.maxByOrNull { it.rssi }
+            if (strongest != null) {
+                MeshState.statusText.postValue("连接信号最强设备 ${strongest.device.address} (${strongest.rssi}dBm)")
+                connectToDevice(strongest)
+            } else {
+                MeshState.statusText.postValue("未扫描到设备列表中的 Proxy 节点")
+                autoConnectFromHistory(onAllFailed = {
+                    autoConnectToStrongestProxy(scanDurationMs)
+                })
+            }
+        }, scanDurationMs)
+    }
+
+    fun autoConnectToStrongestProxy(scanDurationMs: Long = 3000L) {
+        MeshState.statusText.postValue("正在搜索信号最强 Proxy 节点...")
+        val candidates = mutableMapOf<String, ScanResult>()
+        MeshState.bleScanner.startScan(object : BleScannerManager.ScanListener {
+            override fun onDeviceFound(device: ScanResult) {
+                val address = device.device.address
+                val current = candidates[address]
+                if (current == null || device.rssi > current.rssi) {
+                    candidates[address] = device
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                MeshState.statusText.postValue("扫描失败: $errorCode")
+            }
+        })
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MeshState.bleScanner.stopScan()
+            val strongest = candidates.values.maxByOrNull { it.rssi }
+            if (strongest != null) {
+                MeshState.statusText.postValue("连接信号最强 Proxy 节点 ${strongest.device.address} (${strongest.rssi}dBm)")
+                connectToDevice(strongest)
+            } else {
+                MeshState.statusText.postValue("未找到 Proxy 节点")
+            }
+        }, scanDurationMs)
+    }
+
     fun autoConnectToProxy() {
         MeshState.statusText.postValue("正在搜索 Proxy 节点...")
         var foundProxy: ScanResult? = null
