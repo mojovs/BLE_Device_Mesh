@@ -13,6 +13,8 @@ import androidx.activity.viewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.SchedulerTask
+import com.example.ble_device_mesh.data.StreetlightPreset
+import com.example.ble_device_mesh.data.StreetlightPresetRepository
 import com.example.ble_device_mesh.data.StreetlightProfile
 import com.example.ble_device_mesh.ui.StreetlightCurveView
 
@@ -23,6 +25,7 @@ import com.example.ble_device_mesh.ui.StreetlightCurveView
 class StreetlightModeActivity : ComponentActivity() {
 
     private val viewModel: MeshViewModel by viewModels()
+    private lateinit var presetRepository: StreetlightPresetRepository
     private var deviceAddress: Int = 0
     private var deviceName: String = ""
     private var profile = StreetlightProfile.createDefault(0)
@@ -46,6 +49,7 @@ class StreetlightModeActivity : ComponentActivity() {
 
         deviceAddress = intent.getIntExtra(EXTRA_DEVICE_ADDRESS, 0)
         deviceName = intent.getStringExtra(EXTRA_DEVICE_NAME) ?: "设备"
+        presetRepository = StreetlightPresetRepository(this)
         profile = StreetlightProfile.createDefault(deviceAddress)
 
         initViews()
@@ -92,6 +96,8 @@ class StreetlightModeActivity : ComponentActivity() {
 
         // 加载路灯曲线按钮
         findViewById<Button>(R.id.btnLoadStreetlight).setOnClickListener { loadStreetlightCurve() }
+        findViewById<Button>(R.id.btnSavePreset).setOnClickListener { saveCurrentAsPreset() }
+        findViewById<Button>(R.id.btnLoadPreset).setOnClickListener { showLoadPresetDialog() }
 
         // 按钮
         findViewById<Button>(R.id.btnSave).setOnClickListener { saveProfile() }
@@ -381,6 +387,68 @@ class StreetlightModeActivity : ComponentActivity() {
                 refreshListFromCurve()
                 updateStatus()
                 Toast.makeText(this, "已加载路灯曲线，可继续编辑", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun saveCurrentAsPreset() {
+        curveView.clearSelection()
+        val points = curveView.getSortedPoints()
+        if (points.size < 2) {
+            Toast.makeText(this, "请至少设置 2 个控制点", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (points.size > 8) {
+            Toast.makeText(this, "控制点不能超过 8 个", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val input = EditText(this).apply {
+            hint = "预设名称"
+            setText("路灯曲线")
+            selectAll()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("保存为预设")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "请输入预设名称", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                presetRepository.savePreset(
+                    StreetlightPreset(
+                        name = name,
+                        controlPoints = points,
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                Toast.makeText(this, "预设已保存", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showLoadPresetDialog() {
+        val presets = presetRepository.getPresets()
+        if (presets.isEmpty()) {
+            Toast.makeText(this, "暂无预设", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val items = presets.map { "${it.name}\n${it.getDescription()}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("加载预设")
+            .setItems(items) { _, which ->
+                val preset = presets[which]
+                curveView.clearSelection()
+                curveView.controlPoints = preset.controlPoints.toMutableList()
+                refreshListFromCurve()
+                updateStatus()
+                Toast.makeText(this, "已加载预设：${preset.name}", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
