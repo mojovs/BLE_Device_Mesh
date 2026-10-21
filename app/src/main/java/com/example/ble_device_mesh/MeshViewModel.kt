@@ -12,6 +12,7 @@ import no.nordicsemi.android.mesh.MeshManagerCallbacks
 import no.nordicsemi.android.mesh.MeshNetwork
 import no.nordicsemi.android.mesh.MeshStatusCallbacks
 import no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode
+import no.nordicsemi.android.mesh.sensorutils.DeviceProperty
 import no.nordicsemi.android.mesh.transport.ConfigModelAppBind
 import no.nordicsemi.android.mesh.transport.ConfigModelSubscriptionAdd
 import no.nordicsemi.android.mesh.transport.ConfigModelSubscriptionDelete
@@ -1202,6 +1203,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
     
+    // 本 App 能识别的传感器属性 ID（用于区分标准 MPID 与老固件 MPID 编码）
+    private fun isKnownSensorProperty(id: Int): Boolean {
+        return id == 0x004E || id == 0x004F || id == 0x0056 || id == 0x0071
+    }
+
     // 解析传感器数据
     private fun parseSensorStatus(src: Int, data: ByteArray) {
         var offset = 0
@@ -1209,7 +1215,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         
         while (offset < data.size) {
             try {
-                val byte0 = data[offset].toInt()
+                val byte0 = data[offset].toInt() and 0xFF
 
                 // 标准格式解析 (Mesh Spec)
                 // bit0 = format: 0=Format A, 1=Format B
@@ -1220,21 +1226,32 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
                 if (format == 0) {
                     // Format A: 2字节头
-                    // byte0: bit0=0, bits1-4=length-1, bits5-7=upper 3 bits of PropID
-                    // byte1: lower 8 bits of PropID
+                    // octet0: bit0=0, bits1-4=length-1, bits5-7=Property ID bits 2..0
+                    // octet1: Property ID bits 10..3
                     if (offset + 1 >= data.size) break
-                    val lenCode = (byte0 shr 1) and 0xF
-                    length = if (lenCode == 0xF) 0 else lenCode + 1
-                    val upper3Bits = (byte0 shr 5) and 0x7
-                    val lower8Bits = data[offset + 1].toInt() and 0xFF
-                    propertyId = (upper3Bits shl 8) or lower8Bits
+                    length = ((byte0 and 0x1E) shr 1) + 1
+                    val octet1 = data[offset + 1].toInt() and 0xFF
+                    val standardId = (octet1 shl 3) or (byte0 shr 5)
+                    // 老固件(<= v1)曾把属性 ID 的高 3 位放在 bit5..7、低 8 位放在 octet1：
+                    //   温度 0x0071 -> 02 71，光照 0x004E -> 04 4E
+                    // 新固件按标准规范发送：
+                    //   温度 0x0071 -> 22 0E，光照 0x004E -> C4 09
+                    // 两种固件都兼容：标准解出未知属性时回退到老格式解一次。
+                    val legacyId = (((byte0 shr 5) and 0x07) shl 8) or octet1
+                    propertyId = if (isKnownSensorProperty(standardId) || !isKnownSensorProperty(legacyId)) {
+                        standardId
+                    } else {
+                        Log.d("MeshApp", "检测到老固件 MPID: 0x${standardId.toString(16)} -> 0x${legacyId.toString(16)}")
+                        legacyId
+                    }
                     valueOffset = offset + 2
                     offset += 2 + length
                 } else {
                     // Format B: 3字节头, byte0 bit0=1, bits1-6=length-1
                     if (offset + 2 >= data.size) break
-                    val lenCode = (byte0 shr 1) and 0x3F
-                    length = if (lenCode == 0x3F) 0 else lenCode + 1
+                    // Format B: bit0=1, bits1-7=1-based length (0x7F means zero)
+                    val lenCode = (byte0 and 0xFE) shr 1
+                    length = if (lenCode == 0x7F) 0 else lenCode
                     // Property ID 小端序：Byte1=低字节, Byte2=高字节
                     propertyId = ((data[offset + 2].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
                     valueOffset = offset + 3
@@ -1247,7 +1264,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                 // 0x004D = Present Ambient Temperature (标准环境温度)
                 // 0x004F = Present Outdoor Ambient Temperature (室外温度)
                 // 0x0071 = Present Indoor Ambient Temperature (室内温度 - CH592 固件)
-                if (propertyId == 0x004D || propertyId == 0x004F || propertyId == 0x0071) {
+                if (propertyId == 0x004F || propertyId == 0x0056 || propertyId == 0x0071) {
                     if (valueOffset + length <= data.size) {
                        var tempVal = 0.0f
                        if (length == 1) {
@@ -1402,8 +1419,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         try {
             Log.d("MeshApp", "请求所有传感器数据")
             // 传入 null 表示请求所有传感器
-            val message = SensorGet(appKey, null)
-            MeshState.meshManagerApi.createMeshPdu(address, message)
+            val tempMessage = SensorGet(appKey, DeviceProperty.DESIRED_AMBIENT_TEMPERATURE)
+            MeshState.meshManagerApi.createMeshPdu(address, tempMessage)
+            val lightMessage = SensorGet(appKey, DeviceProperty.PRESENT_AMBIENT_LIGHT_LEVEL)
+            MeshState.meshManagerApi.createMeshPdu(address, lightMessage)
         } catch (e: Exception) {
              Log.e("MeshApp", "请求传感器失败: ${e.message}")
              MeshState.statusText.postValue("读取传感器失败: ${e.message}")
@@ -4054,6 +4073,25 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             val clamped = uiBrightness.coerceIn(0, 100)
             val index = (clamped + 1) / 2
             return OC6701_BRIGHTNESS_MAP[index]
+        }
+
+        /**
+         * 反向映射：设备里保存的亮度（已做 OC6701 补偿）→ UI 百分比。
+         * 映射表是多对一（如 UI 58~60% 都对应 25%），这里取最接近的 UI 值。
+         */
+        fun unmapBrightnessForOC6701(deviceBrightness: Int): Int {
+            val target = deviceBrightness.coerceIn(0, 100)
+            var best = 0
+            var bestDiff = Int.MAX_VALUE
+            for (ui in 0..100) {
+                val diff = kotlin.math.abs(mapBrightnessForOC6701(ui) - target)
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    best = ui
+                }
+                if (bestDiff == 0) break
+            }
+            return best
         }
 
         /**

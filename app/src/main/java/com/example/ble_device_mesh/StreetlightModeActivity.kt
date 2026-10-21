@@ -5,6 +5,8 @@ import android.app.TimePickerDialog
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -29,6 +31,12 @@ class StreetlightModeActivity : ComponentActivity() {
     private var deviceAddress: Int = 0
     private var deviceName: String = ""
     private var profile = StreetlightProfile.createDefault(0)
+
+    // 设备回读的调度任务（槽位 0-7 属于路灯曲线）
+    private val deviceTasks = java.util.TreeMap<Int, SchedulerTask>()
+    // 下发期间忽略回读结果，避免开关被中间状态来回改写
+    private var suppressDeviceStateUntil = 0L
+    private val applyDeviceTasksRunnable = Runnable { applyDeviceTasksToUi() }
 
     private lateinit var curveView: StreetlightCurveView
     private lateinit var switchEnabled: Switch
@@ -80,7 +88,7 @@ class StreetlightModeActivity : ComponentActivity() {
         recyclerPoints = findViewById(R.id.recyclerPoints)
         recyclerPoints.layoutManager = LinearLayoutManager(this)
         adapter = ControlPointAdapter(
-            points = profile.controlPoints.toMutableList(),
+            points = curveView.getSortedPoints().toMutableList(),
             onDelete = { index -> deletePoint(index) },
             onEdit = { index -> editControlPoint(index) }
         )
@@ -103,6 +111,126 @@ class StreetlightModeActivity : ComponentActivity() {
         findViewById<Button>(R.id.btnSave).setOnClickListener { saveProfile() }
         findViewById<Button>(R.id.btnSendToDevice).setOnClickListener { sendToDevice() }
         findViewById<Button>(R.id.btnResetDefault).setOnClickListener { resetToDefault() }
+
+        setupDeviceStateObservers()
+    }
+
+    /**
+     * 观察设备回读的调度状态：
+     * 1) SchedulerStatus 给出 16 位槽位 bitmap；
+     * 2) 随后 App 会逐个读取已设置槽位的详情，通过 schedulerTaskUpdates 送达。
+     * 槽位 0-7 即路灯曲线的控制点，据此恢复开关与曲线，而不是只看本地缓存。
+     */
+    private fun setupDeviceStateObservers() {
+        viewModel.schedulerUpdates.observe(this) { (src, bitmap) ->
+            if (src != deviceAddress) return@observe
+            if (isDeviceStateSuppressed()) return@observe
+
+            val slotCount = (0..7).count { (bitmap and (1 shl it)) != 0 }
+            Log.d("Streetlight", "设备回读 bitmap=0x${bitmap.toString(16)}, 路灯槽位(0-7)数量=$slotCount")
+
+            if (slotCount == 0) {
+                // 设备上没有任何路灯槽位 → 曲线未启用（保留本地点位供下次下发）
+                deviceTasks.clear()
+                tvStatus.removeCallbacks(applyDeviceTasksRunnable)
+                applyCurveEnabled(false)
+            } else {
+                // 只要槽位 0-7 有任务，曲线就是启用状态。
+                // 不等详情解析完成，避免详情读取失败时开关一直显示关闭。
+                applyCurveEnabled(true)
+            }
+        }
+
+        viewModel.schedulerTaskUpdates.observe(this) { task ->
+            if (task.deviceAddress != deviceAddress) return@observe
+            if (task.index !in 0..7) return@observe
+            if (isDeviceStateSuppressed()) return@observe
+
+            deviceTasks[task.index] = task
+            // 任务是一条一条读回来的，等这一批读完再统一刷新界面
+            tvStatus.removeCallbacks(applyDeviceTasksRunnable)
+            tvStatus.postDelayed(applyDeviceTasksRunnable, 700)
+        }
+    }
+
+    private fun isDeviceStateSuppressed(): Boolean =
+        SystemClock.elapsedRealtime() < suppressDeviceStateUntil
+
+    /**
+     * 用设备回读的任务重建曲线。
+     * 需要至少 2 个有效槽位才认为是"路灯曲线"，避免把单个普通定时任务误判为曲线。
+     */
+    private fun applyDeviceTasksToUi() {
+        if (isFinishing || isDestroyed) return
+        if (isDeviceStateSuppressed()) return
+
+        val parsed = StreetlightProfile.fromSchedulerTasks(
+            deviceTasks.values.toList(), deviceAddress
+        ) ?: return
+
+        // 设备里存的是补偿后的亮度，显示时反算回 UI 百分比；
+        // 统一按 06:00 为起点排序，兼容旧版本按 00:00 下发到槽位的顺序。
+        val deviceRaw = parsed.controlPoints
+        val devicePoints = deviceRaw
+            .map {
+                StreetlightProfile.ControlPoint(
+                    it.hour, it.minute,
+                    MeshViewModel.unmapBrightnessForOC6701(it.brightness)
+                )
+            }
+            .sortedBy { it.sortKey() }
+        if (devicePoints.size < 2) return
+
+        // 如果设备上的任务就是本地曲线下发的结果，保留本地 UI 亮度值，
+        // 避免 100% 被反算成 99%/96% 这类显示偏差。
+        val localPoints = profile.controlPoints.sortedBy { it.sortKey() }
+        val deviceMatchesLocal = localPoints.size == deviceRaw.size &&
+            localPoints.all { local ->
+                val device = deviceRaw.firstOrNull {
+                    it.hour == local.hour && it.minute == local.minute
+                } ?: return@all false
+                MeshViewModel.mapBrightnessForOC6701(local.brightness) == device.brightness
+            }
+
+        val points = if (deviceMatchesLocal) localPoints else devicePoints
+
+        profile = StreetlightProfile(
+            deviceAddress = deviceAddress,
+            enabled = parsed.enabled,
+            controlPoints = points
+        )
+
+        curveView.controlPoints = points.toMutableList()
+        adapter.updatePoints(points)
+        if (switchEnabled.isChecked != parsed.enabled) {
+            switchEnabled.isChecked = parsed.enabled
+        }
+        updateStatus()
+        persistProfile()
+
+        Log.d("Streetlight", "从设备恢复曲线: enabled=${parsed.enabled}, points=${profile.getDescription()}")
+    }
+
+    /** 只同步开关状态（不覆盖点位） */
+    private fun applyCurveEnabled(enabled: Boolean) {
+        if (switchEnabled.isChecked == enabled) return
+        switchEnabled.isChecked = enabled
+        persistProfile()
+        Log.d("Streetlight", "设备回读: 曲线 ${if (enabled) "已启用" else "未启用"}")
+    }
+
+    private fun persistProfile() {
+        val prefs = getSharedPreferences("StreetlightPrefs", MODE_PRIVATE)
+        prefs.edit().apply {
+            putBoolean("enabled_$deviceAddress", profile.enabled)
+            putInt("point_count_$deviceAddress", profile.controlPoints.size)
+            profile.controlPoints.forEachIndexed { index, point ->
+                putInt("point_${deviceAddress}_${index}_hour", point.hour)
+                putInt("point_${deviceAddress}_${index}_minute", point.minute)
+                putInt("point_${deviceAddress}_${index}_brightness", point.brightness)
+            }
+            apply()
+        }
     }
 
     private fun setupListeners() {
@@ -250,17 +378,7 @@ class StreetlightModeActivity : ComponentActivity() {
         )
 
         // 保存到本地 SharedPreferences
-        val prefs = getSharedPreferences("StreetlightPrefs", MODE_PRIVATE)
-        prefs.edit().apply {
-            putBoolean("enabled_$deviceAddress", profile.enabled)
-            putInt("point_count_$deviceAddress", profile.controlPoints.size)
-            profile.controlPoints.forEachIndexed { index, point ->
-                putInt("point_${deviceAddress}_${index}_hour", point.hour)
-                putInt("point_${deviceAddress}_${index}_minute", point.minute)
-                putInt("point_${deviceAddress}_${index}_brightness", point.brightness)
-            }
-            apply()
-        }
+        persistProfile()
 
         // 刷新控制点列表
         refreshListFromCurve()
@@ -270,6 +388,13 @@ class StreetlightModeActivity : ComponentActivity() {
     }
 
     private fun loadFromDevice() {
+        // 先清掉上一次可能残留的设备回读状态
+        deviceTasks.clear()
+        suppressDeviceStateUntil = 0L
+        if (::tvStatus.isInitialized) {
+            tvStatus.removeCallbacks(applyDeviceTasksRunnable)
+        }
+
         // 从本地加载
         val prefs = getSharedPreferences("StreetlightPrefs", MODE_PRIVATE)
         val enabled = prefs.getBoolean("enabled_$deviceAddress", false)
@@ -286,7 +411,7 @@ class StreetlightModeActivity : ComponentActivity() {
             profile = StreetlightProfile(deviceAddress, enabled, points)
             curveView.controlPoints = points
             switchEnabled.isChecked = enabled
-            adapter.updatePoints(points)
+            adapter.updatePoints(curveView.getSortedPoints())
             updateStatus()
         }
 
@@ -297,7 +422,7 @@ class StreetlightModeActivity : ComponentActivity() {
     }
 
     private fun sendToDevice() {
-        if (!viewModel.isConnected.value!!) {
+        if (viewModel.isConnected.value != true) {
             Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             return
         }
@@ -309,15 +434,22 @@ class StreetlightModeActivity : ComponentActivity() {
             enabled = switchEnabled.isChecked
         )
 
-        if (profile.controlPoints.size < 2) {
-            Toast.makeText(this, "至少需要 2 个控制点", Toast.LENGTH_SHORT).show()
-            return
+        // 只在启用时才校验点位；关闭曲线不需要点位
+        if (profile.enabled) {
+            if (profile.controlPoints.size < 2) {
+                Toast.makeText(this, "至少需要 2 个控制点", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (profile.controlPoints.size > 8) {
+                Toast.makeText(this, "控制点不能超过 8 个", Toast.LENGTH_SHORT).show()
+                return
+            }
         }
 
-        if (profile.controlPoints.size > 8) {
-            Toast.makeText(this, "控制点不能超过 8 个", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // 下发期间及回读确认期内，忽略设备状态回读，避免开关被中间状态改写
+        suppressDeviceStateUntil = SystemClock.elapsedRealtime() + 10_000
+        deviceTasks.clear()
+        tvStatus.removeCallbacks(applyDeviceTasksRunnable)
 
         // 先清除槽位 0-7
         Toast.makeText(this, "正在下发配置...", Toast.LENGTH_SHORT).show()
@@ -337,17 +469,25 @@ class StreetlightModeActivity : ComponentActivity() {
             viewModel.setSchedulerTask(deviceAddress, emptyTask)
         }
 
-        // 下发新的控制点
-        val tasks = profile.toSchedulerTasks(MeshViewModel.Companion::mapBrightnessForOC6701)
-        tasks.forEach { task ->
-            viewModel.setSchedulerTask(deviceAddress, task)
+        // 启用时才下发控制点；关闭则只清空槽位
+        if (profile.enabled) {
+            val tasks = profile.toSchedulerTasks(MeshViewModel.Companion::mapBrightnessForOC6701)
+            tasks.forEach { task ->
+                viewModel.setSchedulerTask(deviceAddress, task)
+            }
         }
+
+        persistProfile()
 
         // 刷新控制点列表
         refreshListFromCurve()
         updateStatus()
 
-        Toast.makeText(this, "定时曲线已下发到设备", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            if (profile.enabled) "定时曲线已下发到设备" else "定时曲线已关闭（设备槽位已清空）",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun resetToDefault() {
@@ -358,7 +498,7 @@ class StreetlightModeActivity : ComponentActivity() {
                 profile = StreetlightProfile.createDefault(deviceAddress)
                 curveView.controlPoints = profile.controlPoints.toMutableList()
                 switchEnabled.isChecked = profile.enabled
-                adapter.updatePoints(profile.controlPoints)
+                adapter.updatePoints(curveView.getSortedPoints())
                 updateStatus()
                 Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show()
             }

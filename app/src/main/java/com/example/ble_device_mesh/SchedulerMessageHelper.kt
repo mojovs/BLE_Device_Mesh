@@ -235,18 +235,19 @@ object SchedulerMessageHelper {
      */
     private fun convertScheduleEntry(entry: Any, index: Int, srcAddress: Int): SchedulerTask? {
         try {
-            val clazz = entry.javaClass
-
-            // 读取各字段值
-            val year = getEnumValue(clazz.getMethod("getYear").invoke(entry))
-            val month = getEnumValue(clazz.getMethod("getMonth").invoke(entry))
-            val day = getEnumValue(clazz.getMethod("getDay").invoke(entry))
-            val hour = getEnumValue(clazz.getMethod("getHour").invoke(entry))
-            val minute = getEnumValue(clazz.getMethod("getMinute").invoke(entry))
-            val second = getEnumValue(clazz.getMethod("getSecond").invoke(entry))
-            val dayOfWeek = getEnumValue(clazz.getMethod("getDayOfWeek").invoke(entry))
-            val actionValue = getEnumValue(clazz.getMethod("getAction").invoke(entry))
-            val sceneValue = getEnumValue(clazz.getMethod("getScene").invoke(entry))
+            // 注意：nRF Mesh 库的 ScheduleEntry 没有 getYear()/getHour() 之类的 getter，
+            // 只有 public 字段 year/hour/minute/...，字段值是 EntryType 子类对象
+            // （如 Hour{value=18}），而 EntryType.getValue() 在一个 private 内部类里，
+            // 直接反射调用会失败。这里改为读 public 字段，再从它的 toString() 里取 value。
+            val year = readEntryField(entry, "year") ?: 100
+            val month = readEntryField(entry, "month") ?: 0xFFF
+            val day = readEntryField(entry, "day") ?: 0
+            val hour = readEntryField(entry, "hour") ?: 0
+            val minute = readEntryField(entry, "minute") ?: 0
+            val second = readEntryField(entry, "second") ?: 0
+            val dayOfWeek = readEntryField(entry, "dayOfWeek") ?: 0
+            val actionValue = readEntryField(entry, "action") ?: return null
+            val sceneValue = readEntryField(entry, "scene") ?: 0
 
             Log.d(TAG, "转换 ScheduleEntry: index=$index, hour=$hour, minute=$minute, action=$actionValue, scene=$sceneValue, dayOfWeek=$dayOfWeek")
 
@@ -282,17 +283,28 @@ object SchedulerMessageHelper {
     }
 
     /**
-     * 从枚举对象提取 value
+     * 读取 ScheduleEntry 的 public 字段值。
+     *
+     * 字段本身是 public（year/hour/action/...），但值类型（Year/Hour/Action...）
+     * 继承自 private 内部类 EntryType，Kotlin/反射都无法安全调用继承来的 getValue()，
+     * 因此这里直接解析字段对象的 toString()，格式固定为 "Hour{value=18}"。
+     *
+     * @return 字段值；字段不存在或无法解析时返回 null
      */
-    private fun getEnumValue(enumObj: Any?): Int {
-        if (enumObj == null) return 0
+    private fun readEntryField(entry: Any, name: String): Int? {
         return try {
-            val method = enumObj.javaClass.getMethod("getValue")
-            method.invoke(enumObj) as? Int ?: 0
+            val field = entry.javaClass.getField(name)
+            val value = field.get(entry) ?: return null
+            ENTRY_VALUE_REGEX.find(value.toString())
+                ?.groupValues?.get(1)?.toIntOrNull()
         } catch (e: Exception) {
-            0
+            Log.w(TAG, "读取 ScheduleEntry.$name 失败: ${e.message}")
+            null
         }
     }
+
+    /** 匹配 "Hour{value=18}" 里的 value */
+    private val ENTRY_VALUE_REGEX = Regex("value=(-?\\d+)")
 }
 
 /**

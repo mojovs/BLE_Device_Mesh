@@ -39,10 +39,10 @@ class StreetlightCurveView @JvmOverloads constructor(
         setLayerType(LAYER_TYPE_HARDWARE, null)
     }
 
-    // 控制点列表
+    // 控制点列表（内部始终按 06:00 为起点的顺序保存，保证列表索引与曲线索引一致）
     var controlPoints = mutableListOf<StreetlightProfile.ControlPoint>()
         set(value) {
-            field = value.toMutableList()
+            field = value.sortedBy { it.sortKey() }.toMutableList()
             invalidate()
         }
 
@@ -119,9 +119,10 @@ class StreetlightCurveView @JvmOverloads constructor(
         textSize = 26f
     }
 
-    // 时间范围偏移（用于夜间聚焦模式，起始偏移至 12:00）
+    // 时间范围偏移：路灯曲线以 06:00 作为一天起点，
+    // 这样曲线按 06:00 → 19:00 → 23:00 → 次日 06:00 连续显示。
     private var nightModeEnabled = false
-    private var rangeStartMinutes = 0
+    private var rangeStartMinutes = StreetlightProfile.ControlPoint.DAY_START_MINUTES
     private var visibleDurationMinutes = 1440f
     private var minVisibleDurationMinutes = 240f
     private var maxVisibleDurationMinutes = 1440f
@@ -565,33 +566,31 @@ class StreetlightCurveView @JvmOverloads constructor(
      */
     private fun canAddPoint(newPoint: StreetlightProfile.ControlPoint): Boolean {
         return controlPoints.none {
-            abs(it.toMinutes() - newPoint.toMinutes()) < snapMinutes * 2
+            cyclicDistanceMinutes(it.toMinutes(), newPoint.toMinutes()) < snapMinutes * 2
         }
     }
 
     /**
-     * 检查是否可以移动控制点到新位置
+     * 检查是否可以移动控制点到新位置。
+     * 时间轴以 06:00 为起点循环，因此只校验时间是否与其它点重合；
+     * 允许跨过相邻点（跨点后按时间重新排序即可）。
      */
     private fun canMovePoint(index: Int, newPoint: StreetlightProfile.ControlPoint): Boolean {
-        val newMinutes = newPoint.toMinutes()
-
-        // 检查与相邻点的时间间隔
-        val sorted = controlPoints.sortedBy { it.toMinutes() }
-        val currentIndexInSorted = sorted.indexOf(controlPoints[index])
-
-        // 前一个点
-        if (currentIndexInSorted > 0) {
-            val prevMinutes = sorted[currentIndexInSorted - 1].toMinutes()
-            if (newMinutes <= prevMinutes + snapMinutes) return false
+        return controlPoints.withIndex().none { (i, point) ->
+            i != index &&
+                cyclicDistanceMinutes(point.toMinutes(), newPoint.toMinutes()) < snapMinutes * 2
         }
+    }
 
-        // 后一个点
-        if (currentIndexInSorted < sorted.size - 1) {
-            val nextMinutes = sorted[currentIndexInSorted + 1].toMinutes()
-            if (newMinutes >= nextMinutes - snapMinutes) return false
-        }
-
-        return true
+    /**
+     * 两个时间在"循环一天"内的最小分钟差（跨 00:00 也正确）
+     */
+    private fun cyclicDistanceMinutes(a: Int, b: Int): Int {
+        val d = abs(
+            StreetlightProfile.ControlPoint.sortKey(a) -
+                StreetlightProfile.ControlPoint.sortKey(b)
+        )
+        return minOf(d, 1440 - d)
     }
 
     /**
@@ -641,35 +640,56 @@ class StreetlightCurveView @JvmOverloads constructor(
     fun addControlPoint(): Boolean {
         if (controlPoints.size >= 8) return false
 
-        val sorted = controlPoints.sortedBy { it.toMinutes() }
+        if (controlPoints.isEmpty()) {
+            controlPoints.add(StreetlightProfile.ControlPoint(18, 0, 100))
+            selectedPointIndex = 0
+            animateSelect()
+            invalidate()
+            return true
+        }
 
-        // 找到最大间隔，在中间插入新点
-        var maxGapIndex = 0
-        var maxGap = 0
-        for (i in 0 until sorted.size - 1) {
-            val gap = sorted[i + 1].toMinutes() - sorted[i].toMinutes()
+        if (controlPoints.size == 1) {
+            val only = controlPoints[0]
+            val newPoint = StreetlightProfile.ControlPoint.fromSortKey(
+                only.sortKey() + 6 * 60, only.brightness
+            )
+            controlPoints.add(newPoint)
+            controlPoints.sortBy { it.sortKey() }
+            selectedPointIndex = controlPoints.indexOfFirst {
+                it.hour == newPoint.hour && it.minute == newPoint.minute
+            }
+            animateSelect()
+            invalidate()
+            return true
+        }
+
+        // 在"06:00 → 次日 06:00"的循环里找最大空档，在中间插入新点
+        val sorted = controlPoints.sortedBy { it.sortKey() }
+        var maxGap = -1
+        var insertKey = 0
+        var midBrightness = 0
+        for (i in sorted.indices) {
+            val startKey = sorted[i].sortKey()
+            val endKey = if (i == sorted.lastIndex) {
+                sorted[0].sortKey() + 1440
+            } else {
+                sorted[i + 1].sortKey()
+            }
+            val gap = endKey - startKey
             if (gap > maxGap) {
                 maxGap = gap
-                maxGapIndex = i
+                insertKey = startKey + gap / 2
+                midBrightness = (sorted[i].brightness + sorted[(i + 1) % sorted.size].brightness) / 2
             }
         }
 
-        val midMinutes = (sorted[maxGapIndex].toMinutes() + sorted[maxGapIndex + 1].toMinutes()) / 2
-        val midBrightness = (sorted[maxGapIndex].brightness + sorted[maxGapIndex + 1].brightness) / 2
-        // 吸附
-        val snappedMinutes = (midMinutes / snapMinutes) * snapMinutes
         val snappedBrightness = (midBrightness / snapBrightness) * snapBrightness
-
-        val newPoint = StreetlightProfile.ControlPoint(
-            hour = snappedMinutes / 60,
-            minute = snappedMinutes % 60,
-            brightness = snappedBrightness
-        )
+        val newPoint = StreetlightProfile.ControlPoint.fromSortKey(insertKey, snappedBrightness)
 
         if (!canAddPoint(newPoint)) return false
 
         controlPoints.add(newPoint)
-        controlPoints.sortBy { it.toMinutes() }
+        controlPoints.sortBy { it.sortKey() }
 
         // 选中新添加的点
         selectedPointIndex = controlPoints.indexOfFirst {
@@ -702,7 +722,8 @@ class StreetlightCurveView @JvmOverloads constructor(
      * 获取当前控制点列表（已排序）
      */
     fun getSortedPoints(): List<StreetlightProfile.ControlPoint> {
-        return controlPoints.sortedBy { it.toMinutes() }
+        // 以 06:00 为一天起点排序：19:00 → 23:00 → 次日 02:00 → 06:00
+        return controlPoints.sortedBy { it.sortKey() }
     }
 
     /**
@@ -728,7 +749,8 @@ class StreetlightCurveView @JvmOverloads constructor(
                 visibleDurationMinutes = nightFocusDurationMinutes
                 minVisibleDurationMinutes = 120f
             } else {
-                rangeStartMinutes = 0
+                // 全天视图同样从 06:00 开始
+                rangeStartMinutes = StreetlightProfile.ControlPoint.DAY_START_MINUTES
                 visibleDurationMinutes = 1440f
                 minVisibleDurationMinutes = 240f
             }
@@ -772,26 +794,11 @@ class StreetlightCurveView @JvmOverloads constructor(
     fun updatePoint(index: Int, newPoint: StreetlightProfile.ControlPoint): Boolean {
         if (index !in controlPoints.indices) return false
 
-        // 检查新位置是否合法（不与相邻点重叠）
-        val sorted = controlPoints.sortedBy { it.toMinutes() }
-        val currentIndexInSorted = sorted.indexOf(controlPoints[index])
-
-        val newMinutes = newPoint.toMinutes()
-
-        // 前一个点
-        if (currentIndexInSorted > 0) {
-            val prevMinutes = sorted[currentIndexInSorted - 1].toMinutes()
-            if (newMinutes <= prevMinutes + snapMinutes) return false
-        }
-
-        // 后一个点
-        if (currentIndexInSorted < sorted.size - 1) {
-            val nextMinutes = sorted[currentIndexInSorted + 1].toMinutes()
-            if (newMinutes >= nextMinutes - snapMinutes) return false
-        }
+        // 只校验与其它控制点时间冲突，允许跨点（跨点后重新排序）
+        if (!canMovePoint(index, newPoint)) return false
 
         controlPoints[index] = newPoint
-        controlPoints.sortBy { it.toMinutes() }
+        controlPoints.sortBy { it.sortKey() }
 
         // 更新选中状态到新位置
         selectedPointIndex = controlPoints.indexOfFirst {

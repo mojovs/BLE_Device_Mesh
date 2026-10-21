@@ -32,17 +32,44 @@ data class StreetlightProfile(
         fun toMinutes(): Int = hour * 60 + minute
 
         /**
+         * 排序键：路灯曲线以 06:00 作为一天的起点。
+         * 排序结果为 06:00 → 19:00 → 23:00 → 次日 02:00 → 05:59，
+         * 而不是从 00:00 开始把凌晨的点排到最前面。
+         */
+        fun sortKey(): Int = sortKey(toMinutes())
+
+        /**
          * 获取时间显示字符串
          */
         fun getTimeString(): String = String.format("%02d:%02d", hour, minute)
 
         companion object {
+            /** 曲线一天的起点：早上 6 点 */
+            const val DAY_START_MINUTES = 6 * 60
+
+            /**
+             * 把 0-1439 的分钟数转换成以 06:00 为 0 点的排序键（0-1439）
+             */
+            fun sortKey(minutes: Int): Int {
+                val normalized = ((minutes % 1440) + 1440) % 1440
+                return (normalized - DAY_START_MINUTES + 1440) % 1440
+            }
+
+            /**
+             * 从排序键还原成控制点（key 0 = 06:00）
+             */
+            fun fromSortKey(key: Int, brightness: Int): ControlPoint {
+                val minutes = (sortKey(key) + DAY_START_MINUTES) % 1440
+                return fromMinutes(minutes, brightness)
+            }
+
             /**
              * 从分钟数创建控制点
              */
             fun fromMinutes(minutes: Int, brightness: Int): ControlPoint {
-                val h = (minutes / 60) % 24
-                val m = minutes % 60
+                val normalized = ((minutes % 1440) + 1440) % 1440
+                val h = normalized / 60
+                val m = normalized % 60
                 return ControlPoint(h, m, brightness)
             }
         }
@@ -76,7 +103,7 @@ data class StreetlightProfile(
      */
     fun getDescription(): String {
         if (controlPoints.isEmpty()) return "未设置"
-        val sorted = controlPoints.sortedBy { it.toMinutes() }
+        val sorted = controlPoints.sortedBy { it.sortKey() }
         return sorted.joinToString(" → ") {
             "${it.getTimeString()} ${it.brightness}%"
         }

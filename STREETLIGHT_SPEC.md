@@ -524,6 +524,18 @@ class StreetlightModeActivity : ComponentActivity() {
 - 设置所有控制点的 `enabled = 0`
 - 或将控制点替换为 `Action = NO_ACTION`
 
+> **实际实现（当前 APK + 固件）**
+> - nRF Mesh 库的 `ScheduleEntry.Action` 只有 TurnOn/TurnOff/Scene/NoAction，
+>   因此 `STREETLIGHT(0x03)` 在线上被编码成 `TurnOn(0x01)`；
+>   固件按 `action != NO_ACTION` 判定启用，无法区分普通开灯任务与路灯控制点。
+> - 所以"启用"= 向槽位 0-7 写入控制点；"禁用"= 向槽位 0-7 写入 `NO_ACTION` 清空
+>   （本地点位保留，下次可直接重新下发）。
+> - 打开路灯模式页时，App 会发送 `Scheduler Get` 读回设备 bitmap 与槽位详情：
+>   槽位 0-7 至少存在 2 个有效任务 → 开关自动置为开启并从设备重建曲线；
+>   一个都没有 → 开关置为关闭，本地点位保留。
+> - 设备里保存的是经 OC6701 补偿后的亮度，回读显示时用
+>   `unmapBrightnessForOC6701()` 反算回 UI 百分比；若设备状态与本地曲线一致则直接沿用本地值。
+
 ### 6.2 控制点设置
 
 与普通 Scheduler Action Set 相同 (OpCode: 0x60)，仅 `Action = 0x03` 区分:
