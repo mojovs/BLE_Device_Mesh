@@ -211,6 +211,94 @@
 
             </LinearLayout>
 
+            <!-- 时间同步区块 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="时间同步"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#6B7280"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginBottom="8dp" />
+
+                <androidx.cardview.widget.CardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="1dp"
+                    xmlns:app="http://schemas.android.com/apk/res-auto"
+                    app:cardBackgroundColor="#FFFFFF">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:id="@+id/tvTimeSyncRole"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="本机角色：管理员（时间权威）"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:textColor="#2D2D2D" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="自动同步间隔"
+                            android:textSize="13sp"
+                            android:textColor="#6B7280" />
+
+                        <Spinner
+                            android:id="@+id/spinnerSyncInterval"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="2dp" />
+
+                        <TextView
+                            android:id="@+id/tvSyncStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="自动同步：每 3 小时"
+                            android:textSize="12sp"
+                            android:textColor="#6B7280" />
+
+                        <Button
+                            android:id="@+id/btnSyncNow"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="12dp"
+                            android:text="立即同步一次"
+                            android:textSize="14sp"
+                            android:backgroundTint="#43A047"
+                            android:textColor="#FFFFFF" />
+
+                        <TextView
+                            android:id="@+id/tvTimeSyncHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="每次同步会临时连接一个 Proxy 节点，约 10 秒；只有偏差超过 5 秒的设备才会被写入。"
+                            android:textSize="11sp"
+                            android:textColor="#9CA3AF" />
+
+                    </LinearLayout>
+
+                </androidx.cardview.widget.CardView>
+
+            </LinearLayout>
+
             <!-- 设备管理区块：删除的设备可以从网络/回收站找回 -->
             <LinearLayout
                 android:layout_width="match_parent"

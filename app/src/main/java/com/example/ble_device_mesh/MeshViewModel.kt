@@ -106,6 +106,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 本机角色：true = 仅控制（导入时剥离了 Device Key，不能清除/配置设备）
         var isControlOnly: Boolean = false
 
+        /** 正在执行「老固件直接 Node Reset」的设备地址，用于区分 0x804A 的含义 */
+        var legacyResetAddress: Int = -1
+
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
         val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
@@ -414,11 +417,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     parseTimeStatus(src, meshMessage)
                 } else if (meshMessage.opCode == 0x804A) {
                     // ConfigNodeResetStatus
-                    // 注意：固件已忽略标准 Node Reset（需要带密码的 PWD_RESET），
-                    // Mesh 库在调用 prov_reset() 前就会回这个状态，因此它不能作为
-                    // “设备已清除配网”的依据，这里只记录，绝不删除本地设备。
-                    Log.w("MeshApp", "收到 Node Reset Status（标准清除已被固件拒绝，忽略）src=0x${src.toString(16)}")
-                    MeshState.statusText.postValue("标准清除配网已被设备拒绝，请使用“设备密码”方式")
+                    if (src == MeshState.legacyResetAddress) {
+                        // 老固件（无密码模型）：标准 Node Reset 有效
+                        Log.d("MeshApp", "老固件已确认 Node Reset (src=0x${src.toString(16)})")
+                        MeshState.statusText.postValue("设备已确认清除配网")
+                        MeshState.legacyResetAddress = -1
+                    } else {
+                        // 新固件已忽略标准 Node Reset（需要带密码的 PWD_RESET），
+                        // 且不能作为“设备已清除配网”的依据，绝不删除本地设备。
+                        Log.w("MeshApp", "收到 Node Reset Status（标准清除已被固件拒绝，忽略）src=0x${src.toString(16)}")
+                        MeshState.statusText.postValue("标准清除配网已被设备拒绝，请使用“设备密码”方式")
+                    }
                 } else if (meshMessage.opCode == 0x824A) {
                     Log.d("MeshApp", "收到 SchedulerStatus (Src: 0x${src.toString(16)}), type=${meshMessage.javaClass.simpleName}")
                     parseSchedulerStatus(src, meshMessage)
@@ -3637,6 +3646,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         Log.d("MeshApp", "  设备名称: ${node?.nodeName ?: "未知"}")
 
         MeshState.statusText.postValue("正在清除设备配网信息...")
+        MeshState.legacyResetAddress = address
 
         if (MeshState.bleConnection.isConnected()) {
             // 已有 Proxy 连接，直接发送（即使连接的是其他 Proxy，消息也会经 Mesh 网络转发）

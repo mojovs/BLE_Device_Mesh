@@ -47,7 +47,7 @@ object TimeSyncNotifier {
             // DEFAULT 才会在状态栏显示图标；再用 setSound(null) + 关震动保证半夜不打扰
             NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
-            description = "每 3 小时自动同步 BLE Mesh 设备时间的结果"
+            description = "BLE Mesh 设备时间自动同步的失败提醒"
             setShowBadge(false)
             enableVibration(false)
             setSound(null, null)

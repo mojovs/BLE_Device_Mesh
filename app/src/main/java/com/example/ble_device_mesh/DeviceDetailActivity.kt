@@ -55,7 +55,6 @@ class DeviceDetailActivity : ComponentActivity() {
     private val timeSyncHandler = Handler(Looper.getMainLooper())
     private var timeSyncTimeoutRunnable: Runnable? = null
     private var isTimeSyncInProgress = false
-    private var hasSyncedTimeForConnection = false
 
     // 亮度拖动节流
     private val brightnessHandler = Handler(Looper.getMainLooper())
@@ -65,9 +64,24 @@ class DeviceDetailActivity : ComponentActivity() {
     private var pendingNewPassword: String? = null  // PWD_SET 成功后写入本地存储
     private var devicePasswordIsSet = false  // 来自设备 PWD_STATUS 的 is_set
     private var devicePasswordStatusKnown = false  // 是否已收到过 PWD_STATUS
+    private val resetFlowHandler = Handler(Looper.getMainLooper())
+    private var pendingResetProbe = false  // 长按清除时正在探测固件版本
+    private var firmwareProbeFailed = false  // 本次会话已确认设备不回版本（老固件）
+
+    /** 探测固件版本超时：没有回应按老固件处理 */
+    private val resetProbeTimeout = Runnable {
+        if (pendingResetProbe) {
+            pendingResetProbe = false
+            firmwareProbeFailed = true
+            confirmLegacyReset(device.firmwareVersion)
+        }
+    }
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
+
+        /** 密码保护（以及 DEV_INFO 模型）从这个固件版本开始提供 */
+        private const val MIN_FIRMWARE_WITH_PASSWORD = "1.0.0"
     }
     
     // 权限请求
@@ -291,8 +305,8 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnNodeReset.text = "长按清除配网信息"
                 btnNodeReset.alpha = 1f
 
-                // 设备端校验密码：先弹密码框，验证通过后才真正清除
-                showResetPasswordDialog()
+                // 新固件设备端校验密码；老固件没有密码模型，直接走标准 Node Reset
+                beginNodeReset()
             }
         }
 
@@ -347,9 +361,14 @@ class DeviceDetailActivity : ComponentActivity() {
             tvRoleNotice.visibility = View.GONE
         }
 
+        // 已知是老固件：没有密码模型，隐藏密码入口（点了也只会超时）
+        device.firmwareVersion?.let { updatePasswordUiForFirmware(it) }
+
         btnDevicePassword.setOnClickListener {
             if (viewModel.isConnected.value != true) {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            } else if (device.firmwareVersion == null && firmwareProbeFailed) {
+                Toast.makeText(this, "该设备固件较旧，不支持设备密码", Toast.LENGTH_SHORT).show()
             } else {
                 showDevicePasswordDialog()
             }
@@ -734,10 +753,17 @@ class DeviceDetailActivity : ComponentActivity() {
         }
         
         btnSyncTime.setOnClickListener {
-            if (viewModel.isConnected.value == true) {
-                startTimeSync()
-            } else {
+            if (viewModel.isConnected.value != true) {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            } else if (viewModel.isControlOnly()) {
+                AlertDialog.Builder(this)
+                    .setTitle("本机为控制端")
+                    .setMessage("设备时间由管理员手机统一同步。\n用本机时间覆盖可能与其他手机冲突，确定继续吗？")
+                    .setPositiveButton("仍要同步") { _, _ -> startTimeSync() }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } else {
+                startTimeSync()
             }
         }
 
@@ -779,8 +805,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnAutoConnect.visibility = View.GONE
                 updateOperationEnabled(connected = true)
 
-                if (!hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
-                    startTimeSync()
+                // 打开页面只读一次设备时间（不写）；写时间交给后台定时同步
+                if (isConnectedToPageDevice()) {
+                    viewModel.readDeviceTime(device.address)
                 }
 
                 // 连接成功后蜂鸣器响一声提示
@@ -808,7 +835,6 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnConnect.text = "断开"
                 btnConnect.visibility = View.GONE
                 btnAutoConnect.visibility = View.VISIBLE
-                hasSyncedTimeForConnection = false
                 finishTimeSync(showToast = false)
                 updateOperationEnabled(connected = false)
 
@@ -827,9 +853,6 @@ class DeviceDetailActivity : ComponentActivity() {
                 if (index >= 0) {
                     isProxyInitialSelection = true  // 防止触发自动连接
                     spinnerProxyAddress.setSelection(index)
-                }
-                if (viewModel.isConnected.value == true && !hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
-                    startTimeSync()
                 }
             }
         }
@@ -851,6 +874,18 @@ class DeviceDetailActivity : ComponentActivity() {
                 device.firmwareVersion = version
                 deviceRepository.updateDevice(device)
                 renderDeviceInfo()
+                updatePasswordUiForFirmware(version)
+
+                // 长按清除时在等版本：按版本决定走密码还是标准 Node Reset
+                if (pendingResetProbe) {
+                    pendingResetProbe = false
+                    resetFlowHandler.removeCallbacks(resetProbeTimeout)
+                    if (firmwareSupportsPassword(version)) {
+                        showResetPasswordDialog()
+                    } else {
+                        confirmLegacyReset(version)
+                    }
+                }
             }
         }
         
@@ -925,8 +960,9 @@ class DeviceDetailActivity : ComponentActivity() {
             btnConnect.visibility = View.VISIBLE
             findViewById<Button>(R.id.btnAutoConnect).visibility = View.GONE
             updateOperationEnabled(connected = true)
-            if (!hasSyncedTimeForConnection && !isTimeSyncInProgress && isConnectedToPageDevice()) {
-                startTimeSync()
+            // 打开页面只读一次设备时间（不写）
+            if (isConnectedToPageDevice()) {
+                viewModel.readDeviceTime(device.address)
             }
         }
     }
@@ -946,7 +982,6 @@ class DeviceDetailActivity : ComponentActivity() {
         }
 
         isTimeSyncInProgress = true
-        hasSyncedTimeForConnection = true
         findViewById<FrameLayout>(R.id.timeSyncOverlay).visibility = View.VISIBLE
         findViewById<TextView>(R.id.tvTimeSyncOverlayStatus).text = "正在同步时间..."
         updateOperationEnabled(connected = true)
@@ -2110,6 +2145,92 @@ class DeviceDetailActivity : ComponentActivity() {
             targetMonitorObserver = null
         }
         viewModel.stopBleScan()
+    }
+
+    /**
+     * 清除配网入口：按固件版本决定要不要密码。
+     * - 新固件（>= 1.0.0）：弹密码框，由设备端校验
+     * - 老固件（没有密码模型）：直接发标准 Node Reset
+     */
+    private fun beginNodeReset() {
+        if (viewModel.isControlOnly()) {
+            Toast.makeText(this, "本机为控制端，不能清除配网", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (viewModel.isConnected.value != true) {
+            Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val version = device.firmwareVersion
+        if (version != null) {
+            if (firmwareSupportsPassword(version)) {
+                showResetPasswordDialog()
+            } else {
+                confirmLegacyReset(version)
+            }
+            return
+        }
+
+        // 版本还没查到：现场探测一次，避免把新固件误判成老固件
+        if (firmwareProbeFailed) {
+            confirmLegacyReset(version)
+            return
+        }
+        pendingResetProbe = true
+        resetFlowHandler.removeCallbacks(resetProbeTimeout)
+        resetFlowHandler.postDelayed(resetProbeTimeout, 2500)
+        viewModel.sendDeviceInfoGet(device.address)
+        Toast.makeText(this, "正在识别设备固件版本...", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 固件版本比较：>= [MIN_FIRMWARE_WITH_PASSWORD] 才有密码保护 */
+    private fun firmwareSupportsPassword(version: String): Boolean {
+        val parts = version.substringBefore('+').trim()
+            .split('.')
+            .mapNotNull { it.toIntOrNull() }
+        if (parts.isEmpty()) return false
+        val required = MIN_FIRMWARE_WITH_PASSWORD.split('.').map { it.toInt() }
+        for (i in required.indices) {
+            val value = parts.getOrElse(i) { 0 }
+            if (value != required[i]) return value > required[i]
+        }
+        return true
+    }
+
+    /** 老固件没有密码模型，标准 Node Reset 直接生效 */
+    private fun confirmLegacyReset(version: String?) {
+        val versionText = version?.let { "固件 v$it" } ?: "固件版本低于 v$MIN_FIRMWARE_WITH_PASSWORD"
+        AlertDialog.Builder(this)
+            .setTitle("清除配网信息")
+            .setMessage(
+                "设备 ${device.name} 的$versionText，不支持密码保护。\n\n" +
+                    "将直接清除配网信息，设备恢复未配网状态，需要重新配网才能使用。"
+            )
+            .setPositiveButton("清除") { _, _ -> doLegacyReset() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun doLegacyReset() {
+        viewModel.resetNode(device.address)
+        Toast.makeText(this, "正在清除配网信息...", Toast.LENGTH_SHORT).show()
+
+        // 老固件收到标准 Node Reset 会立刻复位、退出网络，稍等再清理本地记录
+        resetFlowHandler.postDelayed({
+            deviceRepository.deleteDeviceByAddress(device.address)
+            deviceRepository.purgeDeletedByAddress(device.address)
+            PasswordStore.clear(this, device.address)
+            Toast.makeText(this, "设备已清除配网，可重新配网", Toast.LENGTH_SHORT).show()
+            finish()
+        }, 4000)
+    }
+
+    /** 老固件没有密码模型：隐藏密码入口 */
+    private fun updatePasswordUiForFirmware(version: String) {
+        if (!firmwareSupportsPassword(version)) {
+            findViewById<Button>(R.id.btnDevicePassword).visibility = View.GONE
+        }
     }
 
     /** 清除配网：输入设备密码，由设备端校验 */

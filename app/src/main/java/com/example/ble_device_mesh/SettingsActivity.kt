@@ -3,8 +3,12 @@ package com.example.ble_device_mesh
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -116,6 +120,8 @@ class SettingsActivity : AppCompatActivity() {
         btnMeshTransfer.setOnClickListener {
             startActivity(Intent(this, com.example.ble_device_mesh.mesh_transfer.TransferActivity::class.java))
         }
+
+        setupTimeSyncSection()
         
         
         btnScanProxy.setOnClickListener {
@@ -275,6 +281,79 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "写入文件失败: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * 「时间同步」区块：
+     * - 管理员：可选自动间隔、看上次结果 / 下次触发、手动立刻同步
+     * - 仅控制：只显示提示（时间由管理员手机负责，本机不写设备时间）
+     */
+    private fun setupTimeSyncSection() {
+        val tvRole = findViewById<TextView>(R.id.tvTimeSyncRole)
+        val spinner = findViewById<Spinner>(R.id.spinnerSyncInterval)
+        val tvStatus = findViewById<TextView>(R.id.tvSyncStatus)
+        val tvHint = findViewById<TextView>(R.id.tvTimeSyncHint)
+        val btnSyncNow = findViewById<Button>(R.id.btnSyncNow)
+
+        fun refresh() {
+            tvStatus.text = TimeSyncScheduler.summaryText(this)
+        }
+
+        if (viewModel.isControlOnly()) {
+            tvRole.text = "本机角色：仅控制"
+            spinner.visibility = View.GONE
+            btnSyncNow.visibility = View.GONE
+            tvHint.visibility = View.GONE
+            tvStatus.text = "时间由管理员手机统一同步，本机不参与自动对时。"
+            return
+        }
+
+        tvRole.text = "本机角色：管理员（时间权威）"
+
+        val labels = TimeSyncScheduler.INTERVAL_OPTIONS.map { hours ->
+            if (hours == 0) "关闭自动同步" else "每 $hours 小时"
+        }
+        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+
+        val current = TimeSyncScheduler.intervalHours(this)
+        spinner.setSelection(TimeSyncScheduler.INTERVAL_OPTIONS.indexOf(current).coerceAtLeast(0))
+
+        // setSelection 会回调一次，用已应用的间隔过滤掉，避免无意义的重排闹钟
+        var lastApplied = current
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long
+            ) {
+                val hours = TimeSyncScheduler.INTERVAL_OPTIONS[position]
+                if (hours == lastApplied) return
+                lastApplied = hours
+                TimeSyncScheduler.setIntervalHours(this@SettingsActivity, hours)
+                refresh()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+
+        refresh()
+
+        btnSyncNow.setOnClickListener {
+            btnSyncNow.isEnabled = false
+            Toast.makeText(this, "正在同步时间...", Toast.LENGTH_SHORT).show()
+            TimeSyncEngine.run(this, "manual") {
+                btnSyncNow.isEnabled = true
+                refresh()
+                Toast.makeText(
+                    this,
+                    TimeSyncScheduler.lastResultText(this) ?: "同步结束",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 }

@@ -59,11 +59,21 @@ class SchedulerListActivity : ComponentActivity() {
 
         // 同步时间按钮
         findViewById<TextView>(R.id.btnSyncTime).setOnClickListener {
-            if (viewModel.isConnected.value == true) {
+            if (viewModel.isConnected.value != true) {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            } else if (viewModel.isControlOnly()) {
+                AlertDialog.Builder(this)
+                    .setTitle("本机为控制端")
+                    .setMessage("设备时间由管理员手机统一同步。\n用本机时间覆盖可能与其他手机冲突，确定继续吗？")
+                    .setPositiveButton("仍要同步") { _, _ ->
+                        viewModel.setDeviceTime(deviceAddress)
+                        Toast.makeText(this, "正在同步时间...", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } else {
                 viewModel.setDeviceTime(deviceAddress)
                 Toast.makeText(this, "正在同步时间...", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             }
         }
 
