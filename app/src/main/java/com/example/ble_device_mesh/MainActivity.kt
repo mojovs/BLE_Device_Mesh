@@ -1,19 +1,24 @@
 package com.example.ble_device_mesh
 
 import android.app.AlertDialog
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.*
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
+import com.example.ble_device_mesh.data.GroupRepository
 import com.example.ble_device_mesh.data.MeshDevice
 import java.util.UUID
 
@@ -21,6 +26,33 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MeshViewModel by viewModels()
     private lateinit var deviceAdapter: MeshDeviceAdapter
     private lateinit var deviceRepository: DeviceRepository
+
+    companion object {
+        private const val TAG = "MainActivity"
+        // 全关串行发送间隔，需 >=300ms 规避 MIUI 写特征值不回调的问题
+        private const val ALL_OFF_INTERVAL_MS = 300L
+        // 全关后读回校验：首条读回延迟、读回间隔、等待回包时间
+        private const val VERIFY_START_DELAY_MS = 1200L
+        private const val VERIFY_INTERVAL_MS = 300L
+        private const val VERIFY_WAIT_MS = 1500L
+    }
+
+    // 全关执行中标记，避免连点重复下发
+    private var allOffInProgress = false
+    // 全关过程中投递的延迟任务，便于退出时取消
+    private val allOffRunnables = mutableListOf<Runnable>()
+
+    // 全关读回校验状态：待回包设备 address -> name，校验失败设备 address -> (name, 实际亮度)
+    private var allOffVerifyActive = false
+    private val allOffVerifyPending = mutableMapOf<Int, String>()
+    private val allOffVerifyFailed = mutableMapOf<Int, Pair<String, Int>>()
+    private val allOffVerifyRunnables = mutableListOf<Runnable>()
+
+    // 通知权限（Android 13+），时间同步结果通过通知栏展示
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) Log.w(TAG, "通知权限被拒绝，同步结果不会显示在通知栏")
+        }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,6 +60,10 @@ class MainActivity : ComponentActivity() {
             setContentView(R.layout.activity_main)
 
             deviceRepository = DeviceRepository(this)
+
+            // 排布每 3 小时的时间同步闹钟（即使本次没连上也要排）
+            TimeSyncScheduler.ensureScheduled(this)
+            requestNotificationPermissionIfNeeded()
 
             // 清除旧的温度数据，避免显示过期的信息
             deviceRepository.clearAllTemperatures()
@@ -41,6 +77,20 @@ class MainActivity : ComponentActivity() {
             Log.e("MainActivity", "onCreate 严重错误: ${e.message}")
             e.printStackTrace()
             Toast.makeText(this, "应用启动异常: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    /**
+     * Android 13+ 同步结果需要通过通知栏展示，这里申请一次通知权限。
+     * 没授权时同步照常执行，只是结果看不到通知。
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        try {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } catch (e: Exception) {
+            Log.w(TAG, "请求通知权限失败: ${e.message}")
         }
     }
     
@@ -141,8 +191,9 @@ class MainActivity : ComponentActivity() {
         viewModel.isConnected.observe(this) { connected ->
             if (connected) {
                 tvStatus.text = "状态: 已连接到 Proxy"
-                // 启动时间同步服务
-                TimeSyncService.start(this)
+                // 排布时间同步闹钟；距上次成功同步超过 1 小时则顺带补一次
+                TimeSyncScheduler.ensureScheduled(this)
+                TimeSyncEngine.runIfStale(this, "connect")
                 // 连接后立即读取所有设备的温度
                 readAllTemperatures()
             } else {
@@ -189,24 +240,42 @@ class MainActivity : ComponentActivity() {
             loadDevices()
         }
 
+        // 全关后的读回校验（Generic Level Status → 0-100%）
+        viewModel.levelReadUpdates.observe(this) { (address, percent) ->
+            if (!allOffVerifyActive) return@observe
+            if (allOffVerifyPending.remove(address) == null) return@observe
+
+            Log.d(TAG, "全关校验-回读: 0x${address.toString(16)} = $percent%")
+            if (percent > 0) {
+                val name = deviceRepository.getAllDevices()
+                    .firstOrNull { it.address == address }?.name ?: "0x${address.toString(16)}"
+                allOffVerifyFailed[address] = Pair(name, percent)
+            }
+        }
+
     }
     
+    /**
+     * 一键全关（Mesh 组网）
+     *
+     * 说明：
+     * - 指令经 proxy 节点进入 mesh 后靠泛洪多跳转发，与"手机能否直接扫到该灯"无关，
+     *   因此不按 isOnline 过滤（isOnline 只反映 BLE 视野/最近报文时间）。
+     * - 设备绑定且分组表里存在的组地址只发一次组播（1 帧覆盖全组），
+     *   未分组或组地址已失效的设备用单播补齐，避免"有分组就漏掉未分组设备"。
+     * - 串行发送间隔 >=300ms，规避 MIUI 写特征值不回调的 bug。
+     */
     private fun sendAllOffScene() {
         if (viewModel.isConnected.value != true) {
             Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
             return
         }
-
-        val groups = com.example.ble_device_mesh.data.GroupRepository(this).getAllGroups()
-        if (groups.isNotEmpty()) {
-            groups.forEachIndexed { index, group ->
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    viewModel.sendGroupOnOff(group.address, false)
-                }, index * 80L)
-            }
-            Toast.makeText(this, "已发送全部关闭", Toast.LENGTH_SHORT).show()
+        if (allOffInProgress) {
+            Toast.makeText(this, "正在执行全关，请稍候", Toast.LENGTH_SHORT).show()
             return
         }
+        // 重新执行时先取消上一轮的读回校验
+        cancelAllOffVerify()
 
         val devices = deviceRepository.getAllDevices()
         if (devices.isEmpty()) {
@@ -214,12 +283,164 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        devices.forEachIndexed { index, device ->
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                viewModel.sendOnOff(device.address, false)
-            }, index * 80L)
+        val knownGroupAddresses = GroupRepository(this).getAllGroups().map { it.address }.toSet()
+
+        // 组播目标（去重）与单播目标
+        val groupTargets = mutableListOf<Int>()
+        val unicastTargets = mutableListOf<Int>()
+        devices.forEach { device ->
+            val groupAddress = device.groupAddress
+            if (groupAddress != null && groupAddress in knownGroupAddresses) {
+                if (groupAddress !in groupTargets) groupTargets += groupAddress
+            } else {
+                unicastTargets += device.address
+            }
         }
-        Toast.makeText(this, "已发送全部关闭", Toast.LENGTH_SHORT).show()
+
+        val sendJobs = mutableListOf<() -> Unit>()
+        groupTargets.forEach { addr ->
+            sendJobs += {
+                Log.d(TAG, "全关-组播: 0x${addr.toString(16)}")
+                viewModel.sendGroupOnOff(addr, false)
+            }
+        }
+        unicastTargets.forEach { addr ->
+            sendJobs += {
+                Log.d(TAG, "全关-单播: 0x${addr.toString(16)}")
+                viewModel.sendOnOff(addr, false)
+            }
+        }
+
+        Log.d(TAG, "全关开始: 组播 ${groupTargets.size} 条, 单播 ${unicastTargets.size} 条, 覆盖设备 ${devices.size} 台")
+
+        allOffInProgress = true
+        allOffRunnables.clear() // 上一轮的任务已执行完，清掉避免列表无限增长
+        findViewById<LinearLayout>(R.id.sceneAllOff)?.isEnabled = false
+
+        sendJobs.forEachIndexed { index, job ->
+            val runnable = Runnable { job() }
+            allOffRunnables += runnable
+            handler.postDelayed(runnable, index * ALL_OFF_INTERVAL_MS)
+        }
+
+        // 全部指令投递完毕后再统一清零本地状态，避免与蓝牙写入抢主线程
+        val finishRunnable = Runnable {
+            allOffInProgress = false
+            findViewById<LinearLayout>(R.id.sceneAllOff)?.isEnabled = true
+            applyAllOffLocalState(devices)
+            Toast.makeText(this, "已发送全部关闭", Toast.LENGTH_SHORT).show()
+            // 再花几秒读回亮度，确认哪些设备其实没关掉
+            startAllOffVerify(devices)
+        }
+        allOffRunnables += finishRunnable
+        handler.postDelayed(finishRunnable, sendJobs.size * ALL_OFF_INTERVAL_MS + 300L)
+    }
+
+    /**
+     * 全关后把本地亮度状态清零，让首页卡片的滑条/百分比/灯泡图标立即正确。
+     * 卡片亮度读的是 DevicePrefs 里的 brightness_0x<addr>，不是数据库，所以两边都要写。
+     */
+    private fun applyAllOffLocalState(devices: List<MeshDevice>) {
+        try {
+            val editor = getSharedPreferences("DevicePrefs", MODE_PRIVATE).edit()
+            devices.forEach { device ->
+                editor.putInt("brightness_0x${device.address.toString(16)}", 0)
+            }
+            editor.apply()
+
+            devices.forEach { device ->
+                if (device.brightness != 0) {
+                    deviceRepository.updateDevice(device.copy(brightness = 0))
+                }
+            }
+            loadDevices()
+        } catch (e: Exception) {
+            Log.e(TAG, "全关后更新本地状态失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 全关后逐台读回亮度（Generic Level Get），用来确认指令是否真的到达。
+     * 能直接暴露三类问题：设备不在网内 / TTL 跳数不够 / 组播的 AppKey 绑定缺失（组播没关掉、单播可关）。
+     */
+    private fun startAllOffVerify(devices: List<MeshDevice>) {
+        cancelAllOffVerify()
+        devices.forEach { allOffVerifyPending[it.address] = it.name }
+        val count = allOffVerifyPending.size
+        if (count == 0) return
+
+        allOffVerifyActive = true
+        allOffVerifyPending.keys.forEachIndexed { index, address ->
+            val runnable = Runnable {
+                if (allOffVerifyActive) viewModel.readLevel(address)
+            }
+            allOffVerifyRunnables += runnable
+            handler.postDelayed(runnable, VERIFY_START_DELAY_MS + index * VERIFY_INTERVAL_MS)
+        }
+
+        val finalizeRunnable = Runnable {
+            allOffVerifyActive = false
+            reportAllOffVerify(devices)
+        }
+        allOffVerifyRunnables += finalizeRunnable
+        handler.postDelayed(
+            finalizeRunnable,
+            VERIFY_START_DELAY_MS + count * VERIFY_INTERVAL_MS + VERIFY_WAIT_MS
+        )
+    }
+
+    /** 汇总读回结果：仍亮着的把真实亮度写回本地，无响应的单独列出 */
+    private fun reportAllOffVerify(devices: List<MeshDevice>) {
+        if (isFinishing || isDestroyed) return
+
+        val failed = allOffVerifyFailed.values.toList()
+        val noResponse = allOffVerifyPending.values.toList()
+
+        if (failed.isEmpty() && noResponse.isEmpty()) {
+            Toast.makeText(this, "全关完成，${devices.size} 台已确认关闭", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 仍在亮的设备：把真实亮度写回本地，避免卡片一直显示 0%
+        if (failed.isNotEmpty()) {
+            val editor = getSharedPreferences("DevicePrefs", MODE_PRIVATE).edit()
+            devices.forEach { device ->
+                val actual = allOffVerifyFailed[device.address]?.second
+                if (actual != null) {
+                    editor.putInt("brightness_0x${device.address.toString(16)}", actual)
+                    deviceRepository.updateDevice(device.copy(brightness = actual))
+                }
+            }
+            editor.apply()
+            loadDevices()
+        }
+
+        val message = buildString {
+            append("仍未关闭 ${failed.size} 台：")
+            append(failed.joinToString("、") { "${it.first} ${it.second}%" })
+            if (noResponse.isNotEmpty()) {
+                append("\n\n无响应 ${noResponse.size} 台：")
+                append(noResponse.joinToString("、"))
+            }
+            append("\n\n无响应通常是设备不在网内、跳数(TTL)不够，或组播地址的 AppKey 未绑定。")
+        }
+
+        Log.w(TAG, "全关校验失败: $message")
+
+        AlertDialog.Builder(this)
+            .setTitle("全关校验")
+            .setMessage(message)
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    /** 取消尚未完成的读回校验（重新全关或页面销毁时调用） */
+    private fun cancelAllOffVerify() {
+        allOffVerifyActive = false
+        allOffVerifyRunnables.forEach { handler.removeCallbacks(it) }
+        allOffVerifyRunnables.clear()
+        allOffVerifyPending.clear()
+        allOffVerifyFailed.clear()
     }
 
     private fun loadDevices() {
@@ -330,11 +551,11 @@ class MainActivity : ComponentActivity() {
     private fun showDeleteConfirmDialog(device: MeshDevice) {
         AlertDialog.Builder(this)
             .setTitle("删除设备")
-            .setMessage("确定要删除 ${device.name} 吗？")
-            .setPositiveButton("删除") { _, _ ->
+            .setMessage("确定要把 ${device.name} 从设备列表移除吗？\n\n设备本身仍留在 Mesh 网络中，随时可在「设置 → 设备管理」里找回，不用重新配网。")
+            .setPositiveButton("移除") { _, _ ->
                 deviceRepository.deleteDevice(device.id)
                 loadDevices()
-                Toast.makeText(this, "设备已删除", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已移出列表，可在设置里找回", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -394,5 +615,9 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(temperatureRunnable)
+        // 取消尚未投递的全关任务和读回校验，避免 Activity 销毁后继续往 mesh 发指令
+        allOffRunnables.forEach { handler.removeCallbacks(it) }
+        allOffRunnables.clear()
+        cancelAllOffVerify()
     }
 }

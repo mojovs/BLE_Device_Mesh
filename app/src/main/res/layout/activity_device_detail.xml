@@ -1602,6 +1602,69 @@
                                 android:progress="80" />
                         </LinearLayout>
 
+                        <!-- 检测提示音开关 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="16dp">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="检测提示音"
+                                android:textSize="14sp"
+                                android:textColor="#333333" />
+
+                            <androidx.appcompat.widget.SwitchCompat
+                                android:id="@+id/switchRadarSound"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:thumbTint="@color/switch_thumb_selector"
+                                app:trackTint="@color/switch_track_selector" />
+                        </LinearLayout>
+
+                        <!-- 提示音音量 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="16dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="提示音音量"
+                                    android:textSize="14sp"
+                                    android:textColor="#333333" />
+
+                                <TextView
+                                    android:id="@+id/tvRadarVolume"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="100%"
+                                    android:textSize="14sp"
+                                    android:textColor="#4CAF50"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <SeekBar
+                                android:id="@+id/seekBarRadarVolume"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:max="100"
+                                android:progress="100" />
+                        </LinearLayout>
+
                         <!-- 夜晚时段 -->
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -1868,6 +1931,28 @@
                 android:backgroundTint="#FF9800"
                 android:layout_marginBottom="8dp"
                 android:textSize="14sp" />
+
+            <!-- 设备密码（设置/修改，需旧密码） -->
+            <Button
+                android:id="@+id/btnDevicePassword"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:text="设备密码：点击设置/修改"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#3F51B5"
+                android:layout_marginBottom="8dp"
+                android:textSize="14sp" />
+
+            <!-- 控制端提示（仅角色为 control 时显示） -->
+            <TextView
+                android:id="@+id/tvRoleNotice"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="本机为控制端：可正常开关灯，但不能清除配网或修改设备配置"
+                android:textSize="12sp"
+                android:textColor="#B45309"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone" />
 
             <!-- 状态信息 -->
             <TextView

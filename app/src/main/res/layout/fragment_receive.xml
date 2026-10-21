@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FAF5F0">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/tvHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="打开接收功能后，在发送方 App 中搜索并发送配置。"
+            android:textSize="13sp"
+            android:textColor="#6B7280"
+            android:lineSpacingExtra="4dp" />
+
+        <Button
+            android:id="@+id/btnStartReceive"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="12dp"
+            android:text="开始接收"
+            android:textSize="14sp"
+            android:backgroundTint="#FF6B35"
+            android:textColor="#FFFFFF" />
+
+        <TextView
+            android:id="@+id/tvWaitStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text=""
+            android:textSize="14sp"
+            android:textColor="#2D2D2D"
+            android:visibility="gone" />
+
+        <androidx.cardview.widget.CardView
+            android:id="@+id/layoutPair"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:visibility="gone"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="1dp"
+            xmlns:app="http://schemas.android.com/apk/res-auto"
+            app:cardBackgroundColor="#FFFFFF">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="收到 Mesh 配置请求"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#2D2D2D" />
+
+                <TextView
+                    android:id="@+id/tvRequesterName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text=""
+                    android:textSize="13sp"
+                    android:textColor="#6B7280" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="配对验证码"
+                    android:textSize="13sp"
+                    android:textColor="#6B7280" />
+
+                <TextView
+                    android:id="@+id/tvPairCode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text=""
+                    android:textSize="32sp"
+                    android:textStyle="bold"
+                    android:textColor="#2D2D2D"
+                    android:letterSpacing="0.1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="请确认双方验证码一致"
+                    android:textSize="12sp"
+                    android:textColor="#9CA3AF" />
+
+                <Button
+                    android:id="@+id/btnConfirmPair"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="16dp"
+                    android:text="确认一致，接收配置"
+                    android:textSize="14sp"
+                    android:backgroundTint="#43A047"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btnCancelPair"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:text="拒绝"
+                    android:textSize="14sp"
+                    android:backgroundTint="#EF4444"
+                    android:textColor="#FFFFFF" />
+
+            </LinearLayout>
+
+        </androidx.cardview.widget.CardView>
+
+        <LinearLayout
+            android:id="@+id/layoutProgress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="24dp"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/tvProgress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="0%"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#FF6B35" />
+
+            <TextView
+                android:id="@+id/tvProgressStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text=""
+                android:textSize="13sp"
+                android:textColor="#6B7280" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</ScrollView>

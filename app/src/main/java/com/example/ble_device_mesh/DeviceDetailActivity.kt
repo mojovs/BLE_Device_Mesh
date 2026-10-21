@@ -18,6 +18,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.Spinner
@@ -61,6 +62,9 @@ class DeviceDetailActivity : ComponentActivity() {
     private var lastBrightnessSendTime = 0L
     private val brightnessThrottleMs = 120L
     private var pendingBrightness = -1  // 暂存的亮度值，用于延迟发送
+    private var pendingNewPassword: String? = null  // PWD_SET 成功后写入本地存储
+    private var devicePasswordIsSet = false  // 来自设备 PWD_STATUS 的 is_set
+    private var devicePasswordStatusKnown = false  // 是否已收到过 PWD_STATUS
     
     companion object {
         const val EXTRA_DEVICE = "extra_device"
@@ -287,19 +291,8 @@ class DeviceDetailActivity : ComponentActivity() {
                 btnNodeReset.text = "长按清除配网信息"
                 btnNodeReset.alpha = 1f
 
-                AlertDialog.Builder(this)
-                    .setTitle("确认清除配网信息")
-                    .setMessage("确定要清除设备 ${device.name} 的配网信息吗？\n\n清除后设备将恢复为未配网状态，需要重新配网才能使用。")
-                    .setPositiveButton("确定") { _, _ ->
-                        viewModel.resetNode(device.address)
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            deviceRepository.deleteDeviceByAddress(device.address)
-                            Toast.makeText(this, "设备已移除，可重新配网", Toast.LENGTH_SHORT).show()
-                            finish()
-                        }, 3000)
-                    }
-                    .setNegativeButton("取消", null)
-                    .show()
+                // 设备端校验密码：先弹密码框，验证通过后才真正清除
+                showResetPasswordDialog()
             }
         }
 
@@ -337,6 +330,108 @@ class DeviceDetailActivity : ComponentActivity() {
                     true
                 }
                 else -> false
+            }
+        }
+
+        // ===== 设备密码 / 本机角色 =====
+        val btnDevicePassword = findViewById<Button>(R.id.btnDevicePassword)
+        val tvRoleNotice = findViewById<TextView>(R.id.tvRoleNotice)
+
+        if (viewModel.isControlOnly()) {
+            // 控制端：保留开关灯/调光，隐藏所有需要 Device Key 的操作
+            layoutNodeReset.visibility = View.GONE
+            btnDevicePassword.visibility = View.GONE
+            findViewById<Button>(R.id.btnRebindAppKey).visibility = View.GONE
+            tvRoleNotice.visibility = View.VISIBLE
+        } else {
+            tvRoleNotice.visibility = View.GONE
+        }
+
+        btnDevicePassword.setOnClickListener {
+            if (viewModel.isConnected.value != true) {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+            } else {
+                showDevicePasswordDialog()
+            }
+        }
+
+        // 设备回复密码状态：[is_set]
+        viewModel.getPasswordStatus().observe(this) { (src, isSet) ->
+            if (src == device.address) {
+                devicePasswordIsSet = (isSet == 1)
+                devicePasswordStatusKnown = true
+                btnDevicePassword.text = if (isSet == 1)
+                    "设备密码：已设置（点击修改）"
+                else
+                    "设备密码：默认 0000（点击修改）"
+            }
+        }
+
+        // 密码命令结果（SET / RESET）
+        viewModel.getPasswordOpResult().observe(this) { event ->
+            val (src, op, rc) = event.getContentIfNotHandled() ?: return@observe
+            if (src != device.address) return@observe
+            when (op) {
+                MeshViewModel.PWD_OP_RESET -> {
+                    when (rc) {
+                        MeshViewModel.PWD_RC_OK -> {
+                            // 设备确认已清配网：此时才删除本地设备
+                            deviceRepository.deleteDeviceByAddress(device.address)
+                            deviceRepository.purgeDeletedByAddress(device.address)
+                            PasswordStore.clear(this, device.address)
+                            Toast.makeText(this, "设备已清除配网，可重新配网", Toast.LENGTH_SHORT).show()
+                            finish()
+                        }
+                        MeshViewModel.PWD_RC_WRONG ->
+                            Toast.makeText(this, "密码错误（连续 5 次错误将锁定 60 秒）", Toast.LENGTH_LONG).show()
+                        MeshViewModel.PWD_RC_LOCKED ->
+                            Toast.makeText(this, "密码错误次数过多，请 60 秒后再试", Toast.LENGTH_LONG).show()
+                        MeshViewModel.PWD_RC_FORMAT ->
+                            Toast.makeText(this, "密码格式错误：需 4 位数字/字母", Toast.LENGTH_SHORT).show()
+                        MeshViewModel.PWD_RC_FORBIDDEN ->
+                            Toast.makeText(this, "本机为控制端，不能清除配网", Toast.LENGTH_SHORT).show()
+                        MeshViewModel.PWD_RC_TIMEOUT ->
+                            Toast.makeText(this, "设备无响应，请靠近设备后重试", Toast.LENGTH_SHORT).show()
+                        else ->
+                            Toast.makeText(this, "清除失败（错误码 $rc）", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                MeshViewModel.PWD_OP_SET -> {
+                    when (rc) {
+                        MeshViewModel.PWD_RC_OK -> {
+                            pendingNewPassword?.let { PasswordStore.save(this, device.address, it) }
+                            pendingNewPassword = null
+                            val isSet = PasswordStore.get(this, device.address) != null
+                            devicePasswordIsSet = isSet
+                            devicePasswordStatusKnown = true
+                            btnDevicePassword.text = if (isSet)
+                                "设备密码：已设置（点击修改）"
+                            else
+                                "设备密码：默认 0000（点击修改）"
+                            Toast.makeText(this, "设备密码已更新", Toast.LENGTH_SHORT).show()
+                        }
+                        MeshViewModel.PWD_RC_WRONG -> {
+                            pendingNewPassword = null
+                            Toast.makeText(this, "当前密码错误", Toast.LENGTH_SHORT).show()
+                        }
+                        MeshViewModel.PWD_RC_LOCKED -> {
+                            pendingNewPassword = null
+                            Toast.makeText(this, "密码错误次数过多，请 60 秒后再试", Toast.LENGTH_LONG).show()
+                        }
+                        MeshViewModel.PWD_RC_FORMAT -> {
+                            pendingNewPassword = null
+                            Toast.makeText(this, "密码格式错误：需 4 位数字/字母", Toast.LENGTH_SHORT).show()
+                        }
+                        MeshViewModel.PWD_RC_TIMEOUT -> {
+                            pendingNewPassword = null
+                            Toast.makeText(this, "设备无响应，请重试", Toast.LENGTH_SHORT).show()
+                        }
+                        else -> {
+                            pendingNewPassword = null
+                            Toast.makeText(this, "修改失败（错误码 $rc）", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
             }
         }
 
@@ -400,27 +495,26 @@ class DeviceDetailActivity : ComponentActivity() {
             startAutoConnect()
         }
         
-        // 设备信息
-        tvDeviceInfo.text = if (savedMac != null) {
-            """
-            名称: ${device.name}
-            地址: 0x${device.address.toString(16).uppercase()}
-            类型: ${getDeviceTypeName(device.type)}
-            MAC: $savedMac
-            """.trimIndent()
-        } else {
-            """
-            名称: ${device.name}
-            地址: 0x${device.address.toString(16).uppercase()}
-            类型: ${getDeviceTypeName(device.type)}
-            """.trimIndent()
+        // 设备信息（含固件版本，收到设备回包后自动刷新）
+        fun renderDeviceInfo() {
+            val mac = getDeviceMac(device.address)
+            val fw = device.firmwareVersion
+            tvDeviceInfo.text = buildString {
+                append("名称: ${device.name}")
+                append("\n地址: 0x${device.address.toString(16).uppercase()}")
+                append("\n类型: ${getDeviceTypeName(device.type)}")
+                if (mac != null) append("\nMAC: $mac")
+                append("\n固件: ${if (fw.isNullOrBlank()) "—" else "v$fw"}")
+            }
         }
+        renderDeviceInfo()
         
 
         // 菜单按钮
         findViewById<TextView>(R.id.btnMenu).setOnClickListener { anchor ->
             val popup = android.widget.PopupMenu(this, anchor)
             popup.menu.add(0, 1, 0, "修改名称")
+            popup.menu.add(0, 2, 1, "从列表移除（配网保留）")
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> {
@@ -438,13 +532,22 @@ class DeviceDetailActivity : ComponentActivity() {
                                     deviceRepository.updateDevice(device)
                                     val mac = getDeviceMac(device.address)
                                     tvTitle.text = if (mac != null) "$newName  $mac" else newName
-                                    tvDeviceInfo.text = if (mac != null) {
-                                        "名称: $newName\n地址: 0x${device.address.toString(16).uppercase()}\n类型: ${getDeviceTypeName(device.type)}\nMAC: $mac"
-                                    } else {
-                                        "名称: $newName\n地址: 0x${device.address.toString(16).uppercase()}\n类型: ${getDeviceTypeName(device.type)}"
-                                    }
+                                    renderDeviceInfo()
                                     Toast.makeText(this, "名称已更新", Toast.LENGTH_SHORT).show()
                                 }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                        true
+                    }
+                    2 -> {
+                        AlertDialog.Builder(this)
+                            .setTitle("从列表移除")
+                            .setMessage("只把 ${device.name} 从本地设备列表移除，设备仍留在 Mesh 网络中，\n可在「设置 → 设备管理 → 恢复已删除设备」里一键找回，无需重新配网。")
+                            .setPositiveButton("移除") { _, _ ->
+                                deviceRepository.deleteDevice(device.id)
+                                Toast.makeText(this, "已移出列表，可在设置里找回", Toast.LENGTH_SHORT).show()
+                                finish()
                             }
                             .setNegativeButton("取消", null)
                             .show()
@@ -460,6 +563,44 @@ class DeviceDetailActivity : ComponentActivity() {
         device.brightness = savedBrightness // Update memory object
         seekBarBrightness.progress = savedBrightness
         tvBrightnessValue.text = "$savedBrightness%"
+
+        // 顶部开关按钮（橘色=开 灰色=关）
+        val btnPowerToggle = findViewById<TextView>(R.id.btnPowerToggle)
+        var lastOnBrightness = if (savedBrightness > 0) savedBrightness else 100
+
+        fun renderPowerToggle(isOn: Boolean) {
+            btnPowerToggle.text = if (isOn) "开" else "关"
+            btnPowerToggle.setBackgroundColor(
+                android.graphics.Color.parseColor(if (isOn) "#FF6B35" else "#9E9E9E")
+            )
+        }
+        renderPowerToggle(savedBrightness > 0)
+
+        btnPowerToggle.setOnClickListener {
+            val current = getSavedBrightness(device.address)
+            val targetAddress = device.groupAddress ?: device.address
+            if (current > 0) {
+                // 记住关闭前的亮度，下次开启时恢复
+                lastOnBrightness = current
+                viewModel.sendOnOff(targetAddress, false)
+                saveBrightness(device.address, 0)
+                device.brightness = 0
+                seekBarBrightness.progress = 0
+                tvBrightnessValue.text = "0%"
+                renderPowerToggle(false)
+                Toast.makeText(this, "已关闭", Toast.LENGTH_SHORT).show()
+            } else {
+                val restore = lastOnBrightness.coerceIn(1, 100)
+                viewModel.sendOnOff(targetAddress, true, restore)
+                saveBrightness(device.address, restore)
+                device.brightness = restore
+                seekBarBrightness.progress = restore
+                tvBrightnessValue.text = "$restore%"
+                renderPowerToggle(true)
+                Toast.makeText(this, "已开启 $restore%", Toast.LENGTH_SHORT).show()
+            }
+            deviceRepository.updateDevice(device)
+        }
         
         seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -503,6 +644,7 @@ class DeviceDetailActivity : ComponentActivity() {
 
                     saveBrightness(device.address, progress)
                     device.brightness = progress
+                    renderPowerToggle(progress > 0)
                 }
             }
         })
@@ -518,6 +660,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 viewModel.sendBrightness(targetAddress, newProgress)
                 saveBrightness(device.address, newProgress)
                 device.brightness = newProgress
+                renderPowerToggle(newProgress > 0)
             }
         }
 
@@ -532,6 +675,7 @@ class DeviceDetailActivity : ComponentActivity() {
                 viewModel.sendBrightness(targetAddress, newProgress)
                 saveBrightness(device.address, newProgress)
                 device.brightness = newProgress
+                renderPowerToggle(newProgress > 0)
             }
         }
         
@@ -643,6 +787,20 @@ class DeviceDetailActivity : ComponentActivity() {
                 Handler(Looper.getMainLooper()).postDelayed({
                     viewModel.sendBuzzerBeep(device.address + 3, 50)
                 }, 600)
+
+                // 查询设备密码状态（是否已改过密码）
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (viewModel.isConnected.value == true) {
+                        viewModel.sendPasswordGet(device.address)
+                    }
+                }, 1200)
+
+                // 查询固件版本（设备信息厂商模型）
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (viewModel.isConnected.value == true) {
+                        viewModel.sendDeviceInfoGet(device.address)
+                    }
+                }, 1400)
             } else {
                 tvSignalStrength.visibility = View.GONE
                 tvConnectionStatus.text = "未连接"
@@ -684,6 +842,15 @@ class DeviceDetailActivity : ComponentActivity() {
                 device.temperature = temperature
                 // 持久化保存到 Repository，以便主界面也能看到最新温度
                 deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 观察固件版本回包（写入设备信息栏）
+        viewModel.getFirmwareVersionUpdates().observe(this) { (address, version) ->
+            if (address == device.address) {
+                device.firmwareVersion = version
+                deviceRepository.updateDevice(device)
+                renderDeviceInfo()
             }
         }
         
@@ -1177,6 +1344,9 @@ class DeviceDetailActivity : ComponentActivity() {
         val tvTimes = findViewById<TextView>(R.id.tvRadarTimes)
         val btnReadTimes = findViewById<Button>(R.id.btnRadarReadTimes)
         val btnReadConfig = findViewById<Button>(R.id.btnRadarReadConfig)
+        val switchSound = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarSound)
+        val seekBarVolume = findViewById<SeekBar>(R.id.seekBarRadarVolume)
+        val tvVolume = findViewById<TextView>(R.id.tvRadarVolume)
 
         val radarRepo = com.example.ble_device_mesh.data.RadarDetectionRepository(applicationContext)
         val elem4Addr = device.address + 4  // 雷达 Element 地址
@@ -1218,6 +1388,9 @@ class DeviceDetailActivity : ComponentActivity() {
         tvDuration.text = "%.1f 分钟".format(device.radarNightDurationX10 / 10.0)
         seekBarBrightness.progress = device.radarNightBrightness.coerceIn(1, 100)
         tvBrightness.text = "${device.radarNightBrightness.coerceIn(1, 100)}%"
+        switchSound.isChecked = device.radarSoundEnabled
+        seekBarVolume.progress = device.radarSoundVolume.coerceIn(0, 100)
+        tvVolume.text = "${device.radarSoundVolume.coerceIn(0, 100)}%"
         updateNightHourButtons(device.radarNightStartHour, device.radarNightEndHour)
 
         // 显示本地已有记录数
@@ -1266,6 +1439,31 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
+        // 检测提示音开关
+        switchSound.setOnCheckedChangeListener { _, isChecked ->
+            if (viewModel.isConnected.value == true) {
+                viewModel.sendRadarSoundSet(elem4Addr, if (isChecked) 1 else 0, device.radarSoundVolume)
+                device.radarSoundEnabled = isChecked
+                deviceRepository.updateDevice(device)
+            }
+        }
+
+        // 提示音音量滑块
+        seekBarVolume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvVolume.text = "$progress%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (viewModel.isConnected.value == true) {
+                    val enabledInt = if (device.radarSoundEnabled) 1 else 0
+                    viewModel.sendRadarSoundSet(elem4Addr, enabledInt, seekBarVolume.progress)
+                    device.radarSoundVolume = seekBarVolume.progress
+                    deviceRepository.updateDevice(device)
+                }
+            }
+        })
+
         // 夜晚时段选择
         btnStart.setOnClickListener {
             showRadarNightHourDialog("开始时间", device.radarNightStartHour) { selected ->
@@ -1311,6 +1509,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     viewModel.sendRadarNightHoursGet(elem4Addr)
                 }, 900)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    viewModel.sendRadarSoundGet(elem4Addr)
+                }, 1300)
                 Toast.makeText(this, "已发送读取请求", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
@@ -1376,6 +1577,20 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         }
 
+        // 观察检测提示音配置
+        viewModel.getRadarSound().observe(this) { (src, sound) ->
+            if (src == elem4Addr) {
+                val enabled = sound.first == 1
+                val vol = sound.second.coerceIn(0, 100)
+                switchSound.isChecked = enabled
+                seekBarVolume.progress = vol
+                tvVolume.text = "$vol%"
+                device.radarSoundEnabled = enabled
+                device.radarSoundVolume = vol
+                deviceRepository.updateDevice(device)
+            }
+        }
+
         // 连接状态改变时更新按钮启用
         viewModel.isConnected.observe(this) { connected ->
             btnReadTimes.isEnabled = connected && !isTimeSyncInProgress
@@ -1385,6 +1600,8 @@ class DeviceDetailActivity : ComponentActivity() {
             seekBarBrightness.isEnabled = connected && !isTimeSyncInProgress
             btnStart.isEnabled = connected && !isTimeSyncInProgress
             btnEnd.isEnabled = connected && !isTimeSyncInProgress
+            switchSound.isEnabled = connected && !isTimeSyncInProgress
+            seekBarVolume.isEnabled = connected && !isTimeSyncInProgress
         }
     }
 
@@ -1893,5 +2110,104 @@ class DeviceDetailActivity : ComponentActivity() {
             targetMonitorObserver = null
         }
         viewModel.stopBleScan()
+    }
+
+    /** 清除配网：输入设备密码，由设备端校验 */
+    private fun showResetPasswordDialog() {
+        if (viewModel.isControlOnly()) {
+            Toast.makeText(this, "本机为控制端，不能清除配网", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val input = EditText(this).apply {
+            hint = "4 位设备密码"
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            val saved = PasswordStore.get(this@DeviceDetailActivity, device.address)
+            if (saved != null) {
+                setText(saved)
+            } else if (devicePasswordStatusKnown && !devicePasswordIsSet) {
+                // 只在确认设备仍使用默认密码时预填
+                setText("0000")
+            }
+            setSelection(text.length)
+        }
+        val container = FrameLayout(this).apply {
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("清除配网信息")
+            .setMessage("设备 ${device.name} 需要验证密码。\n\n清除后设备恢复未配网状态，需要重新配网才能使用。\n忘记密码？长按设备按键 10 秒可恢复出厂。")
+            .setView(container)
+            .setPositiveButton("清除") { _, _ ->
+                val pwd = input.text.toString()
+                if (!MeshViewModel.isValidPassword(pwd)) {
+                    Toast.makeText(this, "请输入 4 位数字/字母", Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.resetNodeWithPassword(device.address, pwd)
+                    Toast.makeText(this, "正在验证密码...", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 设置/修改设备密码（需要旧密码） */
+    private fun showDevicePasswordDialog() {
+        if (viewModel.isControlOnly()) {
+            Toast.makeText(this, "本机为控制端，不能修改设备密码", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val stored = PasswordStore.get(this, device.address)
+        val saved = stored ?: if (devicePasswordStatusKnown && !devicePasswordIsSet) "0000" else ""
+
+        val oldInput = EditText(this).apply {
+            hint = "当前密码"
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            setText(saved)
+            setSelection(text.length)
+        }
+        val newInput = EditText(this).apply {
+            hint = "新密码（设为 0000 取消密码）"
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+            addView(TextView(this@DeviceDetailActivity).apply { text = "当前密码" })
+            addView(oldInput)
+            addView(TextView(this@DeviceDetailActivity).apply {
+                text = "新密码"
+                setPadding(0, pad, 0, 0)
+            })
+            addView(newInput)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("设备密码")
+            .setMessage("密码用于保护“清除配网”。开关灯、调光等日常控制不需要密码。")
+            .setView(container)
+            .setPositiveButton("保存") { _, _ ->
+                val oldPwd = oldInput.text.toString()
+                val newPwd = newInput.text.toString()
+                if (!MeshViewModel.isValidPassword(oldPwd) || !MeshViewModel.isValidPassword(newPwd)) {
+                    Toast.makeText(this, "密码需为 4 位数字/字母", Toast.LENGTH_SHORT).show()
+                } else if (viewModel.setDevicePassword(device.address, oldPwd, newPwd)) {
+                    pendingNewPassword = newPwd
+                    Toast.makeText(this, "正在修改密码...", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "发送失败，请重试", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }

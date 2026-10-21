@@ -59,6 +59,24 @@ class GroupRepository(context: Context) {
         return getAllGroups().filter { deviceId in it.memberDeviceIds }
     }
 
+    /**
+     * 从所有分组中移除某个设备（设备被删除/重置时调用），
+     * 避免 memberDeviceIds 残留导致分组"看起来有成员、实际全是幽灵设备"。
+     */
+    fun removeDeviceFromAllGroups(deviceId: String) {
+        val groups = getAllGroups()
+        val affected = groups.filter { deviceId in it.memberDeviceIds }
+        if (affected.isEmpty()) return
+
+        val updated = groups.map { group ->
+            if (deviceId in group.memberDeviceIds) {
+                group.copy(memberDeviceIds = group.memberDeviceIds - deviceId)
+            } else group
+        }
+        saveGroups(updated)
+        Log.d("GroupRepository", "从 ${affected.size} 个分组中移除设备 $deviceId")
+    }
+
     fun allocateGroupAddress(): Int {
         val existing = getAllGroups().map { it.address }.toSet()
         var addr = prefs.getInt(KEY_LAST_ADDR, MIN_GROUP_ADDRESS)

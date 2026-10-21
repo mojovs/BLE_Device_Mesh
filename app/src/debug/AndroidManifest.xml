@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 仅 debug 构建：允许 adb 触发一次时间同步，便于验证 headless 通路 -->
+    <application>
+        <receiver
+            android:name=".DebugTimeSyncReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.ble_device_mesh.DEBUG_TIME_SYNC" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".DebugNotifTestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.ble_device_mesh.DEBUG_NOTIF_TEST" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".DebugImportReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.ble_device_mesh.DEBUG_IMPORT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".DebugDeviceReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.ble_device_mesh.DEBUG_DEVICE" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FAF5F0">
+
+    <!-- 顶部工具栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
+        android:background="#FF6B35"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:elevation="4dp">
+
+        <Button
+            android:id="@+id/btnBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="←"
+            android:textSize="22sp"
+            android:textColor="#FFFFFF"
+            style="?android:attr/borderlessButtonStyle" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="扫描设备地址 / MAC"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- ============ Mesh 地址扫描 ============ -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mesh 地址扫描"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#6B7280"
+                android:layout_marginStart="4dp"
+                android:layout_marginBottom="8dp" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:cardBackgroundColor="#FFFFFF">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="逐个单播地址发一条查询，谁回包就是活着的节点。只需要网络密钥，不需要设备密钥，所以卡片和备份都丢了也能把地址找回来。"
+                        android:textSize="12sp"
+                        android:textColor="#6B7280" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="10dp">
+
+                        <EditText
+                            android:id="@+id/etAddrFrom"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:hint="起始(hex)"
+                            android:text="0001"
+                            android:textSize="13sp"
+                            android:inputType="text"
+                            android:maxLines="1" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="—"
+                            android:textColor="#9CA3AF"
+                            android:layout_marginStart="6dp"
+                            android:layout_marginEnd="6dp" />
+
+                        <EditText
+                            android:id="@+id/etAddrTo"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:hint="结束(hex)"
+                            android:text="00FF"
+                            android:textSize="13sp"
+                            android:inputType="text"
+                            android:maxLines="1" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginTop="8dp">
+
+                        <Button
+                            android:id="@+id/btnScanAddress"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:text="开始扫描地址"
+                            android:textSize="14sp"
+                            android:backgroundTint="#FF6B35"
+                            android:textColor="#FFFFFF" />
+
+                        <Button
+                            android:id="@+id/btnStopScanAddress"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:text="停止"
+                            android:textSize="14sp"
+                            android:backgroundTint="#9CA3AF"
+                            android:textColor="#FFFFFF" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvAddrProgress"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="未开始"
+                        android:textSize="12sp"
+                        android:textColor="#6B7280" />
+
+                    <LinearLayout
+                        android:id="@+id/llAddrResults"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="6dp" />
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- ============ BLE MAC 扫描 ============ -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BLE MAC 扫描"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#6B7280"
+                android:layout_marginStart="4dp"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="8dp" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:cardBackgroundColor="#FFFFFF">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="扫描附近的 Mesh 节点（手机能直接连上的那几台）。点一条选中 MAC，之后在地址列表里『加为设备』会自动带上。"
+                        android:textSize="12sp"
+                        android:textColor="#6B7280" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginTop="10dp">
+
+                        <Button
+                            android:id="@+id/btnScanMac"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:text="扫描附近 MAC"
+                            android:textSize="14sp"
+                            android:backgroundTint="#1976D2"
+                            android:textColor="#FFFFFF" />
+
+                        <Button
+                            android:id="@+id/btnStopScanMac"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:text="停止"
+                            android:textSize="14sp"
+                            android:backgroundTint="#9CA3AF"
+                            android:textColor="#FFFFFF" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMacStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="未开始"
+                        android:textSize="12sp"
+                        android:textColor="#6B7280" />
+
+                    <LinearLayout
+                        android:id="@+id/llMacResults"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="6dp" />
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="提示：Mesh 单播地址是配网时分配的，和 BLE MAC 没有换算关系，只能靠『闪一下』用眼睛确认是哪盏灯。"
+                android:textSize="12sp"
+                android:textColor="#9CA3AF" />
+
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

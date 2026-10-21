@@ -55,8 +55,14 @@ class Event<out T>(private val content: T) {
     }
 }
 
-class MeshViewModel(application: Application): AndroidViewModel(application) {
+/** Mesh 网络里已配网的节点（alreadyAdded=true 表示已在本地设备列表中） */
+data class RecoverableNode(
+    val address: Int,
+    val name: String,
+    val alreadyAdded: Boolean = false
+)
 
+class MeshViewModel(application: Application): AndroidViewModel(application) {
     // 全局单例状态持有者
     // 使用 Object 来保存 Application 级别的状态，确保在不同 Activity 之间共享
     internal object MeshState {
@@ -71,6 +77,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val isNetworkLoaded = MutableLiveData<Boolean>(false)
         val temperatureUpdates = MutableLiveData<Pair<Int, Float>>()
         val lightLevelUpdates = MutableLiveData<Pair<Int, Float>>()
+        // Generic Level Status 读回：Pair<src, 亮度百分比 0-100>，用于全关后校验
+        val levelReadUpdates = MutableLiveData<Pair<Int, Int>>()
         val autoLightStatusUpdates = MutableLiveData<Triple<Int, Int, Int>>() // Triple<src, enabled(0/1), threshold(0-100)>
         val autoLightEnabledUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, enabled(0/1)> - derived from GenericOnOffStatus
         val autoLightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(0-100)>
@@ -83,6 +91,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val radarNightBrightnessUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, brightness(1-100)>
         val radarTimesUpdates = MutableLiveData<Pair<Int, List<Pair<Int, Int>>>>() // Pair<src, List<(hour,min)>>
         val radarNightHoursUpdates = MutableLiveData<Pair<Int, Pair<Int, Int>>>() // Pair<src, Pair<startHour, endHour>>
+        val radarSoundUpdates = MutableLiveData<Pair<Int, Pair<Int, Int>>>() // Pair<src, Pair<enabled(0/1), volume(0-100)>>
+
+        // 设备密码
+        val passwordStatusUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, is_set(0/1)>
+        val passwordOpResult = MutableLiveData<Event<Triple<Int, Int, Int>>>() // Triple<src, op, rc>
+        var pendingPwdOp: Int = MeshViewModel.PWD_OP_NONE
+        var pendingPwdAddress: Int = -1
+        var pendingPwdTimeout: Runnable? = null
+
+        // 固件版本：Pair<src, "1.0.0+1">
+        val firmwareVersionUpdates = MutableLiveData<Pair<Int, String>>()
+
+        // 本机角色：true = 仅控制（导入时剥离了 Device Key，不能清除/配置设备）
+        var isControlOnly: Boolean = false
+
         val timeUpdates = MutableLiveData<Pair<Int, Long>>()
         val schedulerUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, schedules bitmap>
         val schedulerActionUpdates = MutableLiveData<Triple<Int, Int, SchedulerAction>>() // Triple<src, index, action>
@@ -158,6 +181,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     val isNetworkLoaded get() = MeshState.isNetworkLoaded
     val temperatureUpdates get() = MeshState.temperatureUpdates
     val lightLevelUpdates get() = MeshState.lightLevelUpdates
+    val levelReadUpdates get() = MeshState.levelReadUpdates
     val timeUpdates get() = MeshState.timeUpdates
     val schedulerUpdates get() = MeshState.schedulerUpdates
     val schedulerActionUpdates get() = MeshState.schedulerActionUpdates
@@ -211,7 +235,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     private fun initializeGlobalState(app: Application) {
         if (MeshState.isInitialized) return
-        
+
+        // 恢复本机角色（管理员 / 仅控制）
+        MeshState.isControlOnly = app.getSharedPreferences(ROLE_PREFS, android.content.Context.MODE_PRIVATE)
+            .getBoolean(ROLE_KEY_CONTROL_ONLY, false)
+
         Log.d("MeshViewModel", "初始化全局 MeshState")
         MeshState.meshManagerApi = MeshManagerApi(app)
         MeshState.bleConnection = BleConnectionManager(app)
@@ -277,6 +305,24 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         }
                         if (opCode >= 0) {
                             Log.w("MeshApp", "  推测 OpCode: 0x${opCode.toString(16)}")
+                        }
+                    }
+
+                    // 厂商模型（CID=0x07D7）的异步上报：库在非“请求-应答”窗口收到 3 字节
+                    // 厂商 OpCode 时无法匹配模型，会走到这里；自行按 CID + 6bit 字段分发。
+                    if (accessPayload.size >= 4) {
+                        val b0 = accessPayload[0].toInt() and 0xFF
+                        if ((b0 and 0xC0) == 0xC0) {
+                            val cid = (accessPayload[1].toInt() and 0xFF) or
+                                    ((accessPayload[2].toInt() and 0xFF) shl 8)
+                            val vendorOp = b0 and 0x3F
+                            val payload = accessPayload.copyOfRange(3, accessPayload.size)
+                            if (cid == DEVINFO_CID) {
+                                when (vendorOp) {
+                                    OP_DEV_INFO_STATUS -> parseDeviceInfoStatus(src, payload)
+                                    OP_PWD_STATUS -> parsePasswordStatus(src, payload)
+                                }
+                            }
                         }
                     }
                 } else {
@@ -367,19 +413,12 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     }
                     parseTimeStatus(src, meshMessage)
                 } else if (meshMessage.opCode == 0x804A) {
-                    // ConfigNodeResetStatus - 设备已清除配网信息
-                    Log.d("MeshApp", "=== 设备 Node Reset 成功 ===")
-                    Log.d("MeshApp", "  源地址: 0x${src.toString(16)}")
-                    MeshState.statusText.postValue("设备 0x${src.toString(16)} 配网信息已清除")
-
-                    // 从本地数据库中移除设备
-                    try {
-                        val repo = DeviceRepository(getApplication())
-                        repo.deleteDeviceByAddress(src)
-                        Log.d("MeshApp", "已从本地移除设备 0x${src.toString(16)}")
-                    } catch (e: Exception) {
-                        Log.e("MeshApp", "移除设备失败: ${e.message}")
-                    }
+                    // ConfigNodeResetStatus
+                    // 注意：固件已忽略标准 Node Reset（需要带密码的 PWD_RESET），
+                    // Mesh 库在调用 prov_reset() 前就会回这个状态，因此它不能作为
+                    // “设备已清除配网”的依据，这里只记录，绝不删除本地设备。
+                    Log.w("MeshApp", "收到 Node Reset Status（标准清除已被固件拒绝，忽略）src=0x${src.toString(16)}")
+                    MeshState.statusText.postValue("标准清除配网已被设备拒绝，请使用“设备密码”方式")
                 } else if (meshMessage.opCode == 0x824A) {
                     Log.d("MeshApp", "收到 SchedulerStatus (Src: 0x${src.toString(16)}), type=${meshMessage.javaClass.simpleName}")
                     parseSchedulerStatus(src, meshMessage)
@@ -402,6 +441,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     val levelStatus = meshMessage as? no.nordicsemi.android.mesh.transport.GenericLevelStatus
                     val level = levelStatus?.presentLevel?.coerceIn(0, 100) ?: 50
                     Log.d("MeshApp", "GenericLevelStatus(0x8208): level=$level (src=0x${src.toString(16)})")
+                    // 原始 level 是 int16（-32768..32767），换算成 0-100% 供全关校验使用
+                    levelStatus?.let {
+                        MeshState.levelReadUpdates.postValue(Pair(src, meshLevelToPercent(it.presentLevel)))
+                    }
                     // 更新阈值（可能是 Element 1 回复）
                     val lastKnown = MeshState.autoLightStatusUpdates.value
                     val en = lastKnown?.second ?: 0
@@ -416,8 +459,13 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     MeshState.radarNightBrightnessUpdates.postValue(Pair(src, level))
                 } else if (meshMessage is VendorModelMessageStatus) {
                     val data = meshMessage.parameters
-                    Log.d("MeshApp", "收到 VendorModelMessageStatus (Src: 0x${src.toString(16)}): opCode=0x${meshMessage.opCode.toString(16)}, data=${data?.joinToString("") { "%02X".format(it) }}")
-                    when (meshMessage.opCode) {
+                    // 厂商模型标识：兼容 16 位 ModelID 与 (CID << 16) | ModelID 两种形式
+                    val vendorModelId = meshMessage.modelIdentifier and 0xFFFF
+                    Log.d("MeshApp", "收到 VendorModelMessageStatus (Src: 0x${src.toString(16)}): model=0x${vendorModelId.toString(16)}, opCode=0x${meshMessage.opCode.toString(16)}, data=${data?.joinToString("") { "%02X".format(it) }}")
+                    if (vendorModelId == DEVINFO_MODEL_ID && meshMessage.opCode == OP_DEV_INFO_STATUS) {
+                        // 设备信息： [type(2B LE), major, minor, patch, build]
+                        parseDeviceInfoStatus(src, data)
+                    } else when (meshMessage.opCode) {
                         OP_RADAR_TIMES_STATUS -> {
                             // 解析检测时间列表: [count(1B), hour1(1B), min1(1B), hour2(1B), min2(1B), ...]
                             if (data != null && data.isNotEmpty()) {
@@ -444,6 +492,19 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                                 MeshState.radarNightHoursUpdates.postValue(Pair(src, Pair(startHour, endHour)))
                             }
                         }
+                        OP_RADAR_SOUND_GET -> {
+                            // 解析提示音配置: [enabled(1B), volume(1B)]
+                            if (data != null && data.size >= 2) {
+                                val enabled = data[0].toInt() and 0xFF
+                                val volume = data[1].toInt() and 0xFF
+                                Log.d("MeshApp", "雷达提示音: enabled=$enabled, volume=$volume")
+                                MeshState.radarSoundUpdates.postValue(Pair(src, Pair(enabled, volume)))
+                            }
+                        }
+                        OP_PWD_STATUS -> {
+                            // [rc(1B), is_set(1B)]
+                            parsePasswordStatus(src, data)
+                        }
                         else -> {
                             Log.w("MeshApp", "未处理的 Vendor OpCode: 0x${meshMessage.opCode.toString(16)}")
                         }
@@ -460,6 +521,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onNetworkLoaded(network: MeshNetwork?) {
                 Log.d("MeshApp", "onNetworkLoaded 被调用, network = $network")
                 MeshState.meshNetWork = network
+                if (network != null) normalizeEmptyDeviceKeys(network)
 
                 if (network == null) {
                     statusText.postValue("没有发现网络，请导入 nRF Mesh 配置")
@@ -471,6 +533,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     try {
                         setProvisionerAddressInternal(network, addr)
                         MeshState.currentProvisionerAddress.postValue(addr)
+                        ProvisionerSeq.ensureForward(context, network)
                     } catch (e: Exception) {
                         Log.w("MeshApp", "设置 Provisioner 地址失败，使用原始地址: $e")
                         val fallbackAddr = network.selectedProvisioner?.provisionerAddress ?: 0
@@ -510,6 +573,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onNetworkImported(meshNetwork: MeshNetwork?) {
                 Log.d("MeshApp", "onNetworkImported 被调用")
                 MeshState.meshNetWork = meshNetwork
+                if (meshNetwork != null) normalizeEmptyDeviceKeys(meshNetwork)
 
                 if (meshNetwork != null) {
                     // 导入后自动分配本机唯一的 Provisioner 地址
@@ -521,6 +585,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         try {
                             setProvisionerAddressInternal(meshNetwork, newAddr)
                             MeshState.currentProvisionerAddress.postValue(newAddr)
+                            ProvisionerSeq.ensureForward(context, meshNetwork)
                             statusText.postValue("网络已导入 (本机地址: 0x${newAddr.toString(16)})")
                             Log.d("MeshApp", "导入后分配本机 Provisioner 地址: 0x${newAddr.toString(16)}")
                         } catch (e: Exception) {
@@ -1288,6 +1353,28 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         sendBrightness(groupAddress, brightness)
     }
 
+    /**
+     * 读取指定元素的亮度（Generic Level Get）。
+     * 设备会回 Generic Level Status，最终通过 levelReadUpdates 暴露成 0-100%。
+     */
+    fun readLevel(address: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化")
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key")
+            return
+        }
+
+        try {
+            Log.d("MeshApp", "读取亮度: dst=0x${address.toString(16)}")
+            MeshState.meshManagerApi.createMeshPdu(address, GenericLevelGet(appKey))
+        } catch (e: Exception) {
+            Log.e("MeshApp", "读取亮度失败: ${e.message}")
+        }
+    }
+
     fun readSensors(address: Int) {
         val network = MeshState.meshNetWork ?: run {
             Log.e("MeshApp", "Mesh 网络未初始化")
@@ -1679,6 +1766,47 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             MeshState.statusText.postValue("夜晚时段: $startHour:00 - $endHour:00")
         } catch (e: Exception) {
             Log.e("MeshApp", "设置夜晚时段失败: ${e.message}")
+            MeshState.statusText.postValue("设置失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 请求读取检测提示音配置（Element 4 厂商模型）
+     */
+    fun sendRadarSoundGet(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "请求雷达提示音配置: 0x${elementAddress.toString(16)}")
+        try {
+            val msg = VendorModelMessageUnacked(appKey, RADAR_VENDOR_MODEL_ID, RADAR_CID, OP_RADAR_SOUND_GET, null)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+        } catch (e: Exception) {
+            Log.e("MeshApp", "请求提示音配置失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 设置检测提示音配置（Element 4 厂商模型）: [enabled(1B), volume(1B)]
+     */
+    fun sendRadarSoundSet(elementAddress: Int, enabled: Int, volume: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        Log.d("MeshApp", "设置雷达提示音: enabled=$enabled, volume=$volume")
+        try {
+            val params = byteArrayOf(enabled.toByte(), volume.toByte())
+            val msg = VendorModelMessageUnacked(appKey, RADAR_VENDOR_MODEL_ID, RADAR_CID, OP_RADAR_SOUND_SET, params)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
+            MeshState.statusText.postValue("提示音: ${if (enabled == 1) "开" else "关"}, 音量 $volume%")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "设置提示音失败: ${e.message}")
             MeshState.statusText.postValue("设置失败: ${e.message}")
         }
     }
@@ -2258,16 +2386,40 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
+     * 仅控制权限导出：剥离所有节点的 Device Key（接收方无法发 Config 命令，
+     * 无法清除配网/改模型绑定，但仍可用 App Key 正常开关灯）。
+     */
+    private fun exportMeshNetworkControlOnly(): String? {
+        return try {
+            MeshState.meshManagerApi.exportMeshNetwork(
+                no.nordicsemi.android.mesh.NetworkKeysConfig.ExportAll().build(),
+                no.nordicsemi.android.mesh.ApplicationKeysConfig.ExportAll().build(),
+                no.nordicsemi.android.mesh.NodesConfig.ExportWithoutDeviceKey().build(),
+                no.nordicsemi.android.mesh.ProvisionersConfig.ExportAll().build(),
+                no.nordicsemi.android.mesh.GroupsConfig.ExportAll().build(),
+                no.nordicsemi.android.mesh.ScenesConfig.ExportAll().build()
+            )
+        } catch (e: Exception) {
+            Log.e("MeshApp", "仅控制导出失败: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * 导出 Mesh 网络配置 + 设备元数据（名称、类型等）的合并 JSON
      * 用于多手机共享设备控制
+     * @param controlOnly true = 仅控制（剥离 Device Key，不能清除配网）
      */
-    fun exportMeshNetworkWithDevices(): String? {
-        val meshJson = exportMeshNetwork() ?: return null
+    fun exportMeshNetworkWithDevices(controlOnly: Boolean = false): String? {
+        // 控制端本机没有 Device Key，导出时强制按“仅控制”处理
+        val effectiveControlOnly = controlOnly || MeshState.isControlOnly
+        val meshJson = (if (effectiveControlOnly) exportMeshNetworkControlOnly() else exportMeshNetwork()) ?: return null
         try {
             val devices = DeviceRepository(getApplication()).getAllDevices()
             val gson = com.google.gson.Gson()
             val wrapper = java.util.LinkedHashMap<String, Any>()
             wrapper["version"] = 1
+            wrapper["role"] = if (effectiveControlOnly) "control" else "admin"
             wrapper["meshNetwork"] = meshJson
             wrapper["devices"] = devices.map { device ->
                 mapOf(
@@ -2286,6 +2438,41 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         }
     }
 
+    /** 根据导入内容设置本机角色：control = 仅控制（无 Device Key） */
+    private fun applyImportedRole(role: String) {
+        val controlOnly = role.equals("control", ignoreCase = true)
+        MeshState.isControlOnly = controlOnly
+        getApplication<Application>()
+            .getSharedPreferences(ROLE_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(ROLE_KEY_CONTROL_ONLY, controlOnly)
+            .apply()
+        Log.d("MeshApp", "本机角色: ${if (controlOnly) "仅控制" else "管理员"}")
+    }
+
+    /**
+     * nRF Mesh 库在“导出时不含 Device Key”的情况下会把 deviceKey 序列化为 ""，
+     * 反序列化后得到 0 长度数组而不是 null。统一改成 null，
+     * 避免任何误触发的 Config 消息使用空密钥。
+     */
+    private fun normalizeEmptyDeviceKeys(network: MeshNetwork) {
+        try {
+            var count = 0
+            network.nodes.forEach { node ->
+                val key = node.deviceKey
+                if (key != null && key.isEmpty()) {
+                    node.setDeviceKey(null)
+                    count++
+                }
+            }
+            if (count > 0) {
+                Log.d("MeshApp", "已清理 $count 个空 Device Key（仅控制网络）")
+            }
+        } catch (e: Exception) {
+            Log.w("MeshApp", "清理空 Device Key 失败: ${e.message}")
+        }
+    }
+
     /**
      * 导入合并的 JSON（包含 Mesh 网络 + 设备元数据）
      * 兼容旧格式（纯 nRF Mesh JSON）
@@ -2298,6 +2485,8 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
             if (json.has("meshNetwork")) {
                 // === 合并格式 ===
+                // 角色由发送方决定：control = 仅控制（Device Key 已被剥离）
+                applyImportedRole(json.optString("role", "admin"))
                 val meshJson = json.getString("meshNetwork")
                 // 先导入 Mesh 网络（触发 onNetworkImported 回调设置 Provisioner 地址）
                 importMeshNetwork(meshJson)
@@ -2440,12 +2629,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getOrGenerateDeviceAddress(context: android.content.Context): Int {
         val prefs = context.getSharedPreferences("mesh_config", android.content.Context.MODE_PRIVATE)
         
+        // Provisioner 自己的节点 UUID：冲突检测时必须排除，否则每次启动都会把自己的地址当成冲突
+        val provisionerUuid = MeshState.meshNetWork?.selectedProvisioner?.provisionerUuid
+
         // 检查是否已保存地址
         val savedAddress = prefs.getInt("provisioner_address", -1)
         if (savedAddress != -1) {
-            // 即使有缓存也检查冲突（后续导入可能有新节点占用该地址）
+            // 即使有缓存也检查冲突（后续导入可能有新节点占用该地址），但要忽略 Provisioner 自身
             val network = MeshState.meshNetWork
-            if (network != null && network.getNode(savedAddress) != null) {
+            val occupant = network?.getNode(savedAddress)
+            val occupiedByOther = occupant != null && occupant.uuid != provisionerUuid
+            if (occupiedByOther) {
                 Log.w("MeshApp", "缓存地址 0x${savedAddress.toString(16)} 已被节点占用，重新分配")
                 prefs.edit().remove("provisioner_address").apply()
             } else {
@@ -2470,7 +2664,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             var attempts = 0
             while (attempts < 60) {  // 最多尝试 60 次（范围 0x200-0x23F）
                 val node = network.getNode(address)
-                if (node != null) {
+                if (node != null && node.uuid != provisionerUuid) {
                     Log.w("MeshApp", "地址 0x${address.toString(16)} 已被节点 ${node.nodeName} 占用，尝试下一个")
                     address = 0x200 + ((address - 0x200 + 1) % 256)
                     attempts++
@@ -2509,6 +2703,103 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getProxyAddressHistory(): List<String> {
         val prefs = getApplication<Application>().getSharedPreferences("MeshPrefs", android.content.Context.MODE_PRIVATE)
         return prefs.getStringSet("proxy_address_history", emptySet())?.toList() ?: emptyList()
+    }
+
+    /**
+     * Mesh 网络数据库里的全部节点（排除 Provisioner 自身），并标注是否已加入本地设备列表。
+     * 用于「删除了设备还能找回」：删除只影响本地列表，节点仍在网络数据库中。
+     */
+    fun getRecoverableNodes(): List<RecoverableNode> {
+        val network = MeshState.meshNetWork ?: return emptyList()
+        val provisionerUuid = network.selectedProvisioner?.provisionerUuid
+        val existing = DeviceRepository(getApplication()).getAllDevices().map { it.address }.toSet()
+        return network.nodes
+            .filter { it.uuid != provisionerUuid }
+            .map { RecoverableNode(it.unicastAddress, it.nodeName ?: "", it.unicastAddress in existing) }
+            .distinctBy { it.address }
+            .sortedBy { it.address }
+    }
+
+    /** 向指定地址发一条 GenericOnOffGet：节点若在线会回包并刷新 lastMessageTime */
+    fun probeNode(address: Int): Boolean {
+        return try {
+            val appKey = MeshState.meshNetWork?.appKeys?.firstOrNull() ?: return false
+            MeshState.meshManagerApi.createMeshPdu(address, GenericOnOffGet(appKey))
+            true
+        } catch (e: Exception) {
+            Log.w("MeshApp", "探测 0x${address.toString(16)} 失败: ${e.message}")
+            false
+        }
+    }
+
+    // ---------------- 地址扫描：把未知设备的单播地址找回来 ----------------
+
+    private var addressScanRunnable: Runnable? = null
+    private var addressScanning = false
+
+    /**
+     * 逐个单播地址发 GenericOnOffGet（只是查询，不改状态）。
+     * 回包会被 markDeviceOnline 记进 lastMessageTime，调用方据此判断哪些地址活着。
+     * 只用到 NetKey + AppKey，不需要 DevKey —— 卡片和备份都丢了也能找回地址。
+     *
+     * @return false 表示当前无法扫描（没网络 / 没 AppKey / 没连上 Proxy）
+     */
+    fun startAddressScan(
+        from: Int,
+        to: Int,
+        onProgress: (scanned: Int, total: Int) -> Unit,
+        onDone: () -> Unit
+    ): Boolean {
+        val network = MeshState.meshNetWork ?: return false
+        val appKey = network.appKeys.firstOrNull() ?: return false
+        if (!MeshState.bleConnection.isConnected()) return false
+
+        stopAddressScan()
+        val self = try { network.selectedProvisioner?.provisionerAddress ?: -1 } catch (e: Exception) { -1 }
+        val total = (to - from + 1).coerceAtLeast(1)
+        var current = from
+        addressScanning = true
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!addressScanning) return
+                if (current > to) {
+                    addressScanning = false
+                    // 留一点时间收尾包
+                    MeshState.mainHandler.postDelayed({ onDone() }, 800)
+                    return
+                }
+                val target = current
+                current++
+                if (target != self && target < 0xFF00) {
+                    try {
+                        MeshState.meshManagerApi.createMeshPdu(target, GenericOnOffGet(appKey))
+                    } catch (e: Exception) {
+                        Log.w("MeshApp", "扫描 0x${target.toString(16)} 失败: ${e.message}")
+                    }
+                }
+                onProgress(target - from + 1, total)
+                MeshState.mainHandler.postDelayed(this, 70)
+            }
+        }
+        addressScanRunnable = runnable
+        MeshState.mainHandler.post(runnable)
+        return true
+    }
+
+    fun stopAddressScan() {
+        addressScanRunnable?.let { MeshState.mainHandler.removeCallbacks(it) }
+        addressScanRunnable = null
+        addressScanning = false
+    }
+
+    /** 连发两次开关，方便肉眼确认这个地址对应哪盏灯 */
+    fun blinkAddress(address: Int) {
+        val handler = MeshState.mainHandler
+        val steps = listOf(true, false, true, false)
+        steps.forEachIndexed { index, on ->
+            handler.postDelayed({ sendOnOff(address, on, 100) }, index * 500L)
+        }
     }
     
     fun connectToAddress(address: String) {
@@ -2967,7 +3258,13 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         node.elements?.forEach { element ->
             element.value.meshModels?.forEach { (modelId, _) ->
                 hasElements = true
-                if (listOf(0x1000, 0x1002, 0x1100, 0x1200, 0x1206, 0x1207).contains(modelId)) {
+                // 厂商模型的 key 是 (CID << 16) | ModelID，必须用完整 32 位 ID
+                // 才能让 ConfigModelAppBind 按 Vendor Model App Bind 编码
+                if (listOf(
+                        0x1000, 0x1002, 0x1100, 0x1200, 0x1206, 0x1207,
+                        RADAR_VENDOR_MODEL_KEY, DEVINFO_MODEL_KEY
+                    ).contains(modelId)
+                ) {
                     MeshState.configBindQueue.add(Pair(element.value.elementAddress, modelId))
                 }
             }
@@ -2987,7 +3284,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             fallbackModels.forEach { modelId ->
                 MeshState.configBindQueue.add(Pair(primaryAddr, modelId))
             }
+            // 厂商模型：设备信息/密码在主元素，雷达厂商模型在 Element 4
+            MeshState.configBindQueue.add(Pair(primaryAddr, DEVINFO_MODEL_KEY))
+            MeshState.configBindQueue.add(Pair(primaryAddr + 4, RADAR_VENDOR_MODEL_KEY))
             Log.d("MeshApp", "Fallback 绑定 ${MeshState.configBindQueue.size} 个常用模型")
+        } else if (hasElements) {
+            // 保险：无论网络模型表里是否包含厂商模型，都显式绑一次
+            // （主元素 = 主地址，雷达厂商模型 = 主地址 + 4）
+            listOf(
+                Pair(address, DEVINFO_MODEL_KEY),
+                Pair(address + 4, RADAR_VENDOR_MODEL_KEY)
+            ).forEach { binding ->
+                if (!MeshState.configBindQueue.contains(binding)) {
+                    MeshState.configBindQueue.add(binding)
+                }
+            }
         }
 
         MeshState.configBindIndex = 0
@@ -3069,6 +3380,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      * @param address 设备地址
      */
     fun rebindAppKey(address: Int) {
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能修改设备配置")
+            return
+        }
         val network = MeshState.meshNetWork ?: run {
             Log.e("MeshApp", "网络未加载")
             MeshState.statusText.postValue("错误：网络未加载")
@@ -3119,10 +3434,15 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             Log.d("MeshApp", "开始绑定模型...")
 
             var bindCount = 0
+            val sentVendorModels = mutableSetOf<Int>()
             node.elements?.forEach { element ->
                 element.value.meshModels?.forEach { (modelId, model) ->
-                    // 需要绑定的模型列表
-                    if (listOf(0x1002, 0x1100, 0x1200, 0x1206, 0x1207).contains(modelId)) {
+                    // 需要绑定的模型列表（厂商模型用 32 位完整 ID：CID<<16 | ModelID）
+                    if (listOf(
+                            0x1002, 0x1100, 0x1200, 0x1206, 0x1207,
+                            RADAR_VENDOR_MODEL_KEY, DEVINFO_MODEL_KEY
+                        ).contains(modelId)
+                    ) {
                         try {
                             MeshState.meshManagerApi.createMeshPdu(
                                 address,
@@ -3133,10 +3453,36 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                                 )
                             )
                             bindCount++
+                            if (modelId == RADAR_VENDOR_MODEL_KEY || modelId == DEVINFO_MODEL_KEY) {
+                                sentVendorModels.add(modelId)
+                            }
                             Log.d("MeshApp", "  绑定模型 0x${modelId.toString(16)} (Element 0x${element.value.elementAddress.toString(16)})")
                         } catch (e: Exception) {
                             Log.e("MeshApp", "  绑定模型 0x${modelId.toString(16)} 失败: ${e.message}")
                         }
+                    }
+                }
+            }
+
+            // 保险：模型表里没有厂商模型时，按已知 Element 地址显式绑定
+            listOf(
+                Pair(address, DEVINFO_MODEL_KEY),
+                Pair(address + 4, RADAR_VENDOR_MODEL_KEY)
+            ).forEach { (elemAddr, modelId) ->
+                if (!sentVendorModels.contains(modelId)) {
+                    try {
+                        MeshState.meshManagerApi.createMeshPdu(
+                            address,
+                            no.nordicsemi.android.mesh.transport.ConfigModelAppBind(
+                                elemAddr,
+                                modelId,
+                                appKey.keyIndex
+                            )
+                        )
+                        bindCount++
+                        Log.d("MeshApp", "  绑定厂商模型 0x${modelId.toString(16)} (Element 0x${elemAddr.toString(16)})")
+                    } catch (e: Exception) {
+                        Log.e("MeshApp", "  绑定厂商模型 0x${modelId.toString(16)} 失败: ${e.message}")
                     }
                 }
             }
@@ -3162,6 +3508,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      * 遍历设备的所有 Element/Model，发送 ConfigModelSubscriptionAdd
      */
     fun subscribeDeviceToGroup(deviceAddress: Int, groupAddress: Int) {
+        // 控制端没有 Device Key，不能发 Config 消息
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能修改分组")
+            return
+        }
         val network = MeshState.meshNetWork ?: run {
             Log.e("MeshApp", "Mesh 网络未初始化")
             return
@@ -3213,6 +3564,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      * 遍历设备的所有 Element/Model，发送 ConfigModelSubscriptionDelete
      */
     fun unsubscribeDeviceFromGroup(deviceAddress: Int, groupAddress: Int) {
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能修改分组")
+            return
+        }
         val network = MeshState.meshNetWork ?: return
         val node = network.getNode(deviceAddress) ?: return
 
@@ -3257,6 +3612,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getRadarNightBrightness(): MutableLiveData<Pair<Int, Int>> = MeshState.radarNightBrightnessUpdates
     fun getRadarTimes(): MutableLiveData<Pair<Int, List<Pair<Int, Int>>>> = MeshState.radarTimesUpdates
     fun getRadarNightHours(): MutableLiveData<Pair<Int, Pair<Int, Int>>> = MeshState.radarNightHoursUpdates
+    fun getRadarSound(): MutableLiveData<Pair<Int, Pair<Int, Int>>> = MeshState.radarSoundUpdates
+    fun getPasswordStatus(): MutableLiveData<Pair<Int, Int>> = MeshState.passwordStatusUpdates
+    fun getPasswordOpResult(): MutableLiveData<Event<Triple<Int, Int, Int>>> = MeshState.passwordOpResult
+    fun getFirmwareVersionUpdates(): MutableLiveData<Pair<Int, String>> = MeshState.firmwareVersionUpdates
+    fun isControlOnly(): Boolean = MeshState.isControlOnly
 
     /**
      * 发送 Node Reset 命令，清除设备的配网信息
@@ -3283,40 +3643,40 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             sendNodeReset(address)
         } else {
             // 无连接，自动获取设备 MAC 并连接后发送
-            connectAndResetNode(address)
+            connectToDeviceThen(address) { sendNodeReset(address) }
         }
     }
 
     /**
-     * 自动连接到设备 MAC 地址，等待 Proxy 服务就绪后发送 Node Reset
+     * 连接到指定设备的 Proxy 后执行 action（用于无连接时发送命令）
      */
-    private fun connectAndResetNode(address: Int) {
+    private fun connectToDeviceThen(address: Int, action: () -> Unit) {
         val mac = getDeviceMacFromPrefs(address)
         if (mac == null) {
             MeshState.statusText.postValue("错误：未找到设备 MAC 地址，请先连接设备")
-            Log.e("MeshApp", "Node Reset: 未保存设备 0x${address.toString(16)} 的 MAC 地址")
+            Log.e("MeshApp", "未保存设备 0x${address.toString(16)} 的 MAC 地址")
             return
         }
 
         MeshState.statusText.postValue("正在连接 $mac...")
         MeshState.bleConnection.connect(mac, object : BleConnectionManager.ConnectionListener {
             override fun onConnected() {
-                Log.d("MeshApp", "Node Reset: 已连接，等待 Proxy 服务")
+                Log.d("MeshApp", "已连接，等待 Proxy 服务")
                 MeshState.statusText.postValue("已连接，正在发现 Proxy 服务...")
             }
 
             override fun onDisconnected() {
-                Log.w("MeshApp", "Node Reset: 连接断开")
+                Log.w("MeshApp", "连接断开")
             }
 
             override fun onServicesDiscovered() {
                 if (MeshState.bleConnection.isUsingProxyService()) {
-                    Log.d("MeshApp", "Node Reset: Proxy 服务已就绪")
+                    Log.d("MeshApp", "Proxy 服务已就绪")
                     MeshState.isConnected.postValue(true)
                     MeshState.connectedDeviceAddress.postValue(mac)
-                    sendNodeReset(address)
+                    action()
                 } else {
-                    Log.e("MeshApp", "Node Reset: 未找到 Proxy Service (0x1828)")
+                    Log.e("MeshApp", "未找到 Proxy Service (0x1828)")
                     MeshState.statusText.postValue("错误：设备不支持 Mesh Proxy")
                 }
             }
@@ -3332,7 +3692,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             override fun onRssiRead(rssi: Int) {}
 
             override fun onError(error: String) {
-                Log.e("MeshApp", "Node Reset: 连接失败: $error")
+                Log.e("MeshApp", "连接失败: $error")
                 MeshState.statusText.postValue("连接失败：$error")
             }
         })
@@ -3356,6 +3716,117 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
+     * 请求设备密码状态（是否改过密码），结果通过 passwordStatusUpdates 返回
+     */
+    fun sendPasswordGet(address: Int) {
+        sendPasswordCommand(address, OP_PWD_GET, PWD_OP_GET, null)
+    }
+
+    /**
+     * 查询设备固件版本（设备信息厂商模型 0x0003）
+     * 结果通过 firmwareVersionUpdates 返回
+     */
+    fun sendDeviceInfoGet(address: Int) {
+        try {
+            val network = MeshState.meshNetWork ?: run {
+                Log.w("MeshApp", "查询固件版本失败：网络未加载")
+                return
+            }
+            val appKey = network.appKeys.firstOrNull() ?: run {
+                Log.w("MeshApp", "查询固件版本失败：未找到 App Key")
+                return
+            }
+            val msg = VendorModelMessageUnacked(appKey, DEVINFO_MODEL_ID, DEVINFO_CID, OP_DEV_INFO_GET, null)
+            MeshState.meshManagerApi.createMeshPdu(address, msg)
+            Log.d("MeshApp", "查询固件版本已发送: addr=0x${address.toString(16)}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "查询固件版本失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 带密码清除配网（真正的恢复出厂）。成功后设备会退出网络，
+     * App 收到 PWD_STATUS(rc=0) 后再删除本地设备。
+     */
+    fun resetNodeWithPassword(address: Int, password: String) {
+        if (!isValidPassword(password)) {
+            MeshState.passwordOpResult.postValue(Event(Triple(address, PWD_OP_RESET, PWD_RC_FORMAT)))
+            return
+        }
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能清除配网")
+            MeshState.passwordOpResult.postValue(Event(Triple(address, PWD_OP_RESET, PWD_RC_FORBIDDEN)))
+            return
+        }
+
+        val params = password.toByteArray(Charsets.US_ASCII)
+        if (MeshState.bleConnection.isConnected()) {
+            sendPasswordCommand(address, OP_PWD_RESET, PWD_OP_RESET, params)
+        } else {
+            connectToDeviceThen(address) {
+                sendPasswordCommand(address, OP_PWD_RESET, PWD_OP_RESET, params)
+            }
+        }
+    }
+
+    /**
+     * 设置/修改设备密码（需要旧密码）。返回 false 表示参数格式不合法。
+     */
+    fun setDevicePassword(address: Int, oldPwd: String, newPwd: String): Boolean {
+        if (MeshState.isControlOnly) {
+            return false
+        }
+        if (!isValidPassword(oldPwd) || !isValidPassword(newPwd)) {
+            return false
+        }
+        val params = oldPwd.toByteArray(Charsets.US_ASCII) + newPwd.toByteArray(Charsets.US_ASCII)
+        sendPasswordCommand(address, OP_PWD_SET, PWD_OP_SET, params)
+        return true
+    }
+
+    /**
+     * 发送密码命令（统一处理 pending 与超时）
+     * @param op PWD_OP_GET / PWD_OP_SET / PWD_OP_RESET
+     */
+    private fun sendPasswordCommand(address: Int, opcode: Int, op: Int, params: ByteArray?) {
+        val network = MeshState.meshNetWork ?: run {
+            MeshState.statusText.postValue("错误：网络未加载")
+            MeshState.passwordOpResult.postValue(Event(Triple(address, op, PWD_RC_SEND_FAIL)))
+            return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            MeshState.statusText.postValue("错误：未找到 App Key")
+            MeshState.passwordOpResult.postValue(Event(Triple(address, op, PWD_RC_SEND_FAIL)))
+            return
+        }
+
+        MeshState.pendingPwdTimeout?.let { MeshState.mainHandler.removeCallbacks(it) }
+        MeshState.pendingPwdOp = op
+        MeshState.pendingPwdAddress = address
+        val timeout = Runnable {
+            if (MeshState.pendingPwdOp == op && MeshState.pendingPwdAddress == address) {
+                MeshState.pendingPwdOp = PWD_OP_NONE
+                MeshState.pendingPwdTimeout = null
+                MeshState.passwordOpResult.postValue(Event(Triple(address, op, PWD_RC_TIMEOUT)))
+            }
+        }
+        MeshState.pendingPwdTimeout = timeout
+        MeshState.mainHandler.postDelayed(timeout, PWD_TIMEOUT_MS)
+
+        try {
+            val msg = VendorModelMessageUnacked(appKey, DEVINFO_MODEL_ID, DEVINFO_CID, opcode, params)
+            MeshState.meshManagerApi.createMeshPdu(address, msg)
+            Log.d("MeshApp", "密码命令已发送: op=$op, opcode=0x${opcode.toString(16)}, addr=0x${address.toString(16)}")
+        } catch (e: Exception) {
+            MeshState.mainHandler.removeCallbacks(timeout)
+            MeshState.pendingPwdTimeout = null
+            MeshState.pendingPwdOp = PWD_OP_NONE
+            Log.e("MeshApp", "发送密码命令失败: ${e.message}")
+            MeshState.passwordOpResult.postValue(Event(Triple(address, op, PWD_RC_SEND_FAIL)))
+        }
+    }
+
+    /**
      * 设置中继转发参数
      * @param address 设备单播地址
      * @param relay 中继状态 (0=禁用, 1=启用, 2=不支持)
@@ -3363,6 +3834,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      * @param retransmitIntervalSteps 重发间隔步长 (0-31，实际间隔 = (步长+1)*10ms)
      */
     fun setRelayConfig(address: Int, relay: Int, retransmitCount: Int, retransmitIntervalSteps: Int) {
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能修改设备配置")
+            return
+        }
         try {
             MeshState.meshManagerApi.createMeshPdu(address, ConfigRelaySet(relay, retransmitCount, retransmitIntervalSteps))
             Log.d("MeshApp", "ConfigRelaySet: relay=$relay, count=$retransmitCount, interval=$retransmitIntervalSteps")
@@ -3380,6 +3855,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
      * @param intervalSteps 发送间隔步长 (0-31，实际间隔 = (步长+1)*10ms)
      */
     fun setNetworkTransmit(address: Int, transmitCount: Int, intervalSteps: Int) {
+        if (MeshState.isControlOnly) {
+            MeshState.statusText.postValue("本机为控制端，不能修改设备配置")
+            return
+        }
         try {
             MeshState.meshManagerApi.createMeshPdu(address, ConfigNetworkTransmitSet(transmitCount, intervalSteps))
             Log.d("MeshApp", "ConfigNetworkTransmitSet: count=$transmitCount, interval=$intervalSteps")
@@ -3387,6 +3866,40 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         } catch (e: Exception) {
             Log.e("MeshApp", "设置网络发送失败: ${e.message}")
             MeshState.statusText.postValue("设置失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 解析设备信息回包： [type(2B LE), major, minor, patch, build]
+     */
+    private fun parseDeviceInfoStatus(src: Int, data: ByteArray?) {
+        if (data == null || data.size < 6) {
+            Log.w("MeshApp", "设备信息回包长度异常: ${data?.size ?: 0}")
+            return
+        }
+        val typeId = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+        val version = "${data[2].toInt() and 0xFF}.${data[3].toInt() and 0xFF}." +
+                "${data[4].toInt() and 0xFF}+${data[5].toInt() and 0xFF}"
+        Log.d("MeshApp", "设备信息: type=0x${typeId.toString(16)}, 固件版本=v$version (src=0x${src.toString(16)})")
+        MeshState.firmwareVersionUpdates.postValue(Pair(src, version))
+    }
+
+    /**
+     * 解析设备密码状态回包： [rc(1B), is_set(1B)]
+     */
+    private fun parsePasswordStatus(src: Int, data: ByteArray?) {
+        if (data == null || data.size < 2) return
+        val rc = data[0].toInt() and 0xFF
+        val isSet = data[1].toInt() and 0xFF
+        Log.d("MeshApp", "设备密码状态: rc=$rc, is_set=$isSet (src=0x${src.toString(16)})")
+        MeshState.passwordStatusUpdates.postValue(Pair(src, isSet))
+
+        val op = MeshState.pendingPwdOp
+        if (op != PWD_OP_NONE && MeshState.pendingPwdAddress == src) {
+            MeshState.pendingPwdTimeout?.let { MeshState.mainHandler.removeCallbacks(it) }
+            MeshState.pendingPwdTimeout = null
+            MeshState.pendingPwdOp = PWD_OP_NONE
+            MeshState.passwordOpResult.postValue(Event(Triple(src, op, rc)))
         }
     }
 
@@ -3465,6 +3978,58 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         const val OP_RADAR_TIMES_STATUS = 0x02
         const val OP_RADAR_NIGHT_HOURS_GET = 0x03
         const val OP_RADAR_NIGHT_HOURS_SET = 0x04
+        const val OP_RADAR_SOUND_GET = 0x05
+        const val OP_RADAR_SOUND_SET = 0x06
+
+        // Vendor model constants (设备信息 / 密码) —— 模型 0x0003
+        // 注意：nRF Mesh 库对厂商消息使用 6-bit 字段（发送时自动补 0xC0 + CID），
+        // 所以这里必须是 0x10..0x13，而不是完整 24-bit 值。
+        const val DEVINFO_CID = 0x07D7
+        const val DEVINFO_MODEL_ID = 0x0003
+
+        // 厂商模型在 nRF Mesh 库中的完整 ID：(CID << 16) | ModelID
+        // 只有用完整 ID 调 ConfigModelAppBind，库才会按 Vendor Model App Bind 编码
+        const val RADAR_VENDOR_MODEL_KEY = 0x07D70002
+        const val DEVINFO_MODEL_KEY = 0x07D70003
+        const val OP_PWD_GET = 0x10
+        const val OP_PWD_SET = 0x11
+        const val OP_PWD_RESET = 0x12
+        const val OP_PWD_STATUS = 0x13
+
+        // 设备信息（软件版本）：[type(2B LE), major, minor, patch, build]
+        // 注意 0x01/0x02 与雷达模型的 GET/STATUS 相同，接收时必须先用
+        // VendorModelMessageStatus.modelIdentifier 区分模型（0x0003 vs 0x0002）
+        const val OP_DEV_INFO_GET = 0x01
+        const val OP_DEV_INFO_STATUS = 0x02
+
+        // 密码操作类型
+        const val PWD_OP_NONE = 0
+        const val PWD_OP_GET = 1
+        const val PWD_OP_SET = 2
+        const val PWD_OP_RESET = 3
+
+        // 结果码（与固件一致；0xFD 起为 App 本地错误）
+        const val PWD_RC_OK = 0
+        const val PWD_RC_WRONG = 1
+        const val PWD_RC_FORMAT = 2
+        const val PWD_RC_LOCKED = 3
+        const val PWD_RC_FORBIDDEN = 0xFD
+        const val PWD_RC_SEND_FAIL = 0xFE
+        const val PWD_RC_TIMEOUT = 0xFF
+
+        const val PWD_TIMEOUT_MS = 5000L
+
+        // 本机角色持久化
+        const val ROLE_PREFS = "MeshRolePrefs"
+        const val ROLE_KEY_CONTROL_ONLY = "is_control_only"
+
+        /** 4 位数字/字母（与固件校验一致） */
+        fun isValidPassword(s: String): Boolean {
+            if (s.length != 4) return false
+            return s.all { c ->
+                (c in '0'..'9') || (c in 'A'..'Z') || (c in 'a'..'z')
+            }
+        }
 
         private val OC6701_BRIGHTNESS_MAP = intArrayOf(
             0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
@@ -3479,6 +4044,15 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             val clamped = uiBrightness.coerceIn(0, 100)
             val index = (clamped + 1) / 2
             return OC6701_BRIGHTNESS_MAP[index]
+        }
+
+        /**
+         * Mesh Level（int16, -32768..32767）→ 百分比 0-100。
+         * 与固件 mesh_level_to_percent 的线性映射保持一致：-32768 → 0%，32767 → 100%。
+         */
+        fun meshLevelToPercent(meshLevel: Int): Int {
+            val clamped = meshLevel.coerceIn(-32768, 32767)
+            return (((clamped + 32768).toLong() * 100L) / 65535L).toInt().coerceIn(0, 100)
         }
     }
 }

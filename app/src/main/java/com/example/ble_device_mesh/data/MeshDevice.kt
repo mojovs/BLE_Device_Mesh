@@ -16,6 +16,7 @@ data class MeshDevice(
     var temperature: Float? = null,  // 当前温度（摄氏度）
     var deviceTime: Long? = null,  // 设备时间（Unix 时间戳，秒）
     var lightLevel: Float? = null,  // 当前光照度百分比（0-100%）
+    var firmwareVersion: String? = null,  // 固件版本（形如 "1.0.0+1"），由设备信息模型查询
     var isOnline: Boolean = false,  // 是否在线
     val addedTime: Long = System.currentTimeMillis(),  // 添加时间
     var sortOrder: Int = 0,  // 排序序号，用于自定义排列
@@ -25,7 +26,9 @@ data class MeshDevice(
     var radarNightDurationX10: Int = 30,  // 夜晚亮灯时长 (×0.1分钟), 默认3.0分钟
     var radarNightBrightness: Int = 80,  // 雷达夜晚亮灯亮度 1-100
     var radarNightStartHour: Int = 18,  // 夜晚开始小时
-    var radarNightEndHour: Int = 6  // 夜晚结束小时
+    var radarNightEndHour: Int = 6,  // 夜晚结束小时
+    var radarSoundEnabled: Boolean = true,  // 检测提示音开关
+    var radarSoundVolume: Int = 100  // 检测提示音音量 0-100
 ) : Parcelable
 
 enum class DeviceType {

@@ -16,8 +16,19 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     
+    <!-- 面对面互传：WiFi Direct 相关权限 -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
     <!-- 蓝牙功能声明 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -52,6 +63,12 @@
             android:exported="false"
             android:label="设置"
             android:theme="@style/Theme.BLE_Device_Mesh"/>
+
+        <activity
+            android:name=".DeviceFinderActivity"
+            android:exported="false"
+            android:label="扫描设备地址 / MAC"
+            android:theme="@style/Theme.BLE_Device_Mesh"/>
         
         <activity
             android:name=".DeviceDetailActivity"
@@ -83,14 +100,36 @@
             android:exported="false"
             android:theme="@style/Theme.BLE_Device_Mesh"/>
 
-        <service
-            android:name=".TimeSyncService"
+        <activity
+            android:name=".mesh_transfer.TransferActivity"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:theme="@style/Theme.BLE_Device_Mesh"/>
 
         <receiver
             android:name=".ScheduleReceiver"
             android:exported="false"/>
+
+        <!-- 每 3 小时一次的时间同步闹钟 -->
+        <receiver
+            android:name=".TimeSyncAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.ble_device_mesh.TIME_SYNC_ALARM" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 开机 / 改时间 / 换时区 / 升级后重排闹钟 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
