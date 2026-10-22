@@ -1372,6 +1372,8 @@ class DeviceDetailActivity : ComponentActivity() {
         val switchEnable = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)
         val seekBarDuration = findViewById<SeekBar>(R.id.seekBarRadarDuration)
         val tvDuration = findViewById<TextView>(R.id.tvRadarDuration)
+        val btnDurationDown = findViewById<Button>(R.id.btnRadarDurationDown)
+        val btnDurationUp = findViewById<Button>(R.id.btnRadarDurationUp)
         val seekBarBrightness = findViewById<SeekBar>(R.id.seekBarRadarBrightness)
         val tvBrightness = findViewById<TextView>(R.id.tvRadarBrightness)
         val btnStart = findViewById<Button>(R.id.btnRadarNightStart)
@@ -1390,6 +1392,23 @@ class DeviceDetailActivity : ComponentActivity() {
         fun updateNightHourButtons(start: Int, end: Int) {
             btnStart.text = "%02d:00".format(start.coerceIn(0, 23))
             btnEnd.text = "%02d:00".format(end.coerceIn(0, 23))
+        }
+
+        // 时长显示：不足 1 分钟时直接显示秒数，方便细调到十几秒
+        fun formatRadarDuration(durationX10: Int): String =
+            if (durationX10 < 10) "${durationX10 * 6} 秒"
+            else "%.1f 分钟".format(durationX10 / 10.0)
+
+        // 统一处理时长变化：更新 UI、本地记忆，并按需下发到设备
+        fun applyRadarDuration(value: Int, send: Boolean) {
+            val v = value.coerceIn(0, 200)
+            seekBarDuration.progress = v
+            tvDuration.text = formatRadarDuration(v)
+            device.radarNightDurationX10 = v
+            deviceRepository.updateDevice(device)
+            if (send && viewModel.isConnected.value == true) {
+                viewModel.sendRadarNightDuration(elem4Addr, v)
+            }
         }
 
         fun showRadarNightHourDialog(title: String, current: Int, onSelected: (Int) -> Unit) {
@@ -1420,7 +1439,7 @@ class DeviceDetailActivity : ComponentActivity() {
         // 默认状态
         switchEnable.isChecked = device.radarEnabled
         seekBarDuration.progress = device.radarNightDurationX10.coerceIn(0, 200)
-        tvDuration.text = "%.1f 分钟".format(device.radarNightDurationX10 / 10.0)
+        tvDuration.text = formatRadarDuration(device.radarNightDurationX10.coerceIn(0, 200))
         seekBarBrightness.progress = device.radarNightBrightness.coerceIn(1, 100)
         tvBrightness.text = "${device.radarNightBrightness.coerceIn(1, 100)}%"
         switchSound.isChecked = device.radarSoundEnabled
@@ -1435,7 +1454,7 @@ class DeviceDetailActivity : ComponentActivity() {
         // 时长滑块
         seekBarDuration.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                tvDuration.text = "%.1f 分钟".format(progress / 10.0)
+                tvDuration.text = formatRadarDuration(progress)
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
@@ -1446,6 +1465,14 @@ class DeviceDetailActivity : ComponentActivity() {
                 }
             }
         })
+
+        // 时长细调按钮（每次 ±1 = 0.1 分钟）
+        btnDurationDown.setOnClickListener {
+            applyRadarDuration(seekBarDuration.progress - 1, send = true)
+        }
+        btnDurationUp.setOnClickListener {
+            applyRadarDuration(seekBarDuration.progress + 1, send = true)
+        }
 
         // 亮度滑块
         seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -1567,7 +1594,7 @@ class DeviceDetailActivity : ComponentActivity() {
             if (src == elem4Addr) {
                 val d = durationX10.coerceIn(0, 200)
                 seekBarDuration.progress = d
-                tvDuration.text = "%.1f 分钟".format(d / 10.0)
+                tvDuration.text = formatRadarDuration(d)
                 device.radarNightDurationX10 = d
                 deviceRepository.updateDevice(device)
             }
@@ -1576,10 +1603,18 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察雷达亮灯亮度
         viewModel.getRadarNightBrightness().observe(this) { (src, brightness) ->
             if (src == elem5Addr) {
-                val b = brightness.coerceIn(1, 100)
-                seekBarBrightness.progress = b
-                tvBrightness.text = "$b%"
-                device.radarNightBrightness = b
+                val devicePct = brightness.coerceIn(1, 100)
+                // 设备里存的是 OC6701 补偿后的百分比，界面显示的是 UI 百分比。
+                // 若设备值与当前 UI 的映射值一致就保持 UI 不变，避免滑块跳变。
+                val ui = if (MeshViewModel.mapBrightnessForOC6701(
+                        device.radarNightBrightness.coerceIn(1, 100)) == devicePct) {
+                    device.radarNightBrightness.coerceIn(1, 100)
+                } else {
+                    MeshViewModel.unmapBrightnessForOC6701(devicePct)
+                }
+                seekBarBrightness.progress = ui
+                tvBrightness.text = "$ui%"
+                device.radarNightBrightness = ui
                 deviceRepository.updateDevice(device)
             }
         }
@@ -1632,6 +1667,8 @@ class DeviceDetailActivity : ComponentActivity() {
             btnReadConfig.isEnabled = connected && !isTimeSyncInProgress
             switchEnable.isEnabled = connected && !isTimeSyncInProgress
             seekBarDuration.isEnabled = connected && !isTimeSyncInProgress
+            btnDurationDown.isEnabled = connected && !isTimeSyncInProgress
+            btnDurationUp.isEnabled = connected && !isTimeSyncInProgress
             seekBarBrightness.isEnabled = connected && !isTimeSyncInProgress
             btnStart.isEnabled = connected && !isTimeSyncInProgress
             btnEnd.isEnabled = connected && !isTimeSyncInProgress

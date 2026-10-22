@@ -1716,6 +1716,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
     /**
      * 发送雷达夜晚亮灯亮度（Element 5 Generic Level）
+     *
+     * 注意：雷达亮度协议里传的是“固件内部亮度百分比”，与手动亮度一样
+     * 需要先经过 OC6701 补偿曲线（UI 百分比 → 实际驱动百分比），
+     * 否则同样 UI 24% 会比手动亮度亮很多。
      */
     fun sendRadarNightBrightness(elementAddress: Int, brightness: Int) {
         val network = MeshState.meshNetWork ?: run {
@@ -1724,12 +1728,13 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         val appKey = network.appKeys.firstOrNull() ?: run {
             Log.e("MeshApp", "未找到 App Key"); return
         }
-        val v = brightness.coerceIn(1, 100)
-        Log.d("MeshApp", "发送雷达夜晚亮度: $v% to 0x${elementAddress.toString(16)}")
+        val ui = brightness.coerceIn(1, 100)
+        val v = mapBrightnessForOC6701(ui).coerceIn(1, 100)
+        Log.d("MeshApp", "发送雷达夜晚亮度: UI=$ui%, mapped=$v% to 0x${elementAddress.toString(16)}")
         try {
             val msg = GenericLevelSetUnacknowledged(appKey, v, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddress, msg)
-            MeshState.statusText.postValue("雷达亮灯亮度: $v%")
+            MeshState.statusText.postValue("雷达亮灯亮度: $ui%")
         } catch (e: Exception) {
             Log.e("MeshApp", "发送雷达亮度失败: ${e.message}")
             MeshState.statusText.postValue("发送失败: ${e.message}")
