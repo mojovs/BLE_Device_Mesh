@@ -14,6 +14,35 @@ class SchedulerRepository(context: Context) {
     private val prefs = context.getSharedPreferences("SchedulerPrefs", Context.MODE_PRIVATE)
     private val gson = Gson()
 
+    init {
+        migrateBrightnessToUiIfNeeded()
+    }
+
+    /**
+     * 旧版本把 OC6701 补偿后的设备亮度直接存进了本地缓存，
+     * 新版本统一按 UI 百分比存储。这里做一次性转换，
+     * 否则旧任务被再次下发时会被二次映射导致灯变暗。
+     */
+    private fun migrateBrightnessToUiIfNeeded() {
+        if (prefs.getBoolean(KEY_BRIGHTNESS_MIGRATED, false)) return
+
+        val type = object : TypeToken<List<SchedulerTask>>() {}.type
+        val editor = prefs.edit()
+        prefs.all.forEach { (key, value) ->
+            if (!key.startsWith(TASK_KEY_PREFIX) || value !is String) return@forEach
+            try {
+                val tasks = gson.fromJson<List<SchedulerTask>>(value, type) ?: return@forEach
+                val migrated = tasks.map {
+                    it.copy(brightness = BrightnessMap.unmap(it.brightness))
+                }
+                editor.putString(key, gson.toJson(migrated))
+            } catch (_: Exception) {
+                // 解析失败的任务保持原样，下次从设备读取时会覆盖
+            }
+        }
+        editor.putBoolean(KEY_BRIGHTNESS_MIGRATED, true).apply()
+    }
+
     /**
      * 获取指定设备的所有任务
      */
@@ -90,5 +119,10 @@ class SchedulerRepository(context: Context) {
     fun clearTasks(deviceAddress: Int) {
         val key = "tasks_0x${deviceAddress.toString(16)}"
         prefs.edit().remove(key).apply()
+    }
+
+    private companion object {
+        const val TASK_KEY_PREFIX = "tasks_0x"
+        const val KEY_BRIGHTNESS_MIGRATED = "brightness_migrated_to_ui_v1"
     }
 }
