@@ -118,7 +118,9 @@ object SchedulerMessageHelper {
         )
 
         // Scene Number: 用于传递亮度值（固件自定义扩展）
-        val sceneValue = task.brightness.coerceIn(0, 100)
+        // task.brightness 统一是 UI 百分比，这里转换成设备需要的 OC6701 补偿值再下发，
+        // 保证 App 各处显示/编辑的都是同一个 UI 百分比（以路灯模式为基准）。
+        val sceneValue = MeshViewModel.mapBrightnessForOC6701(task.brightness).coerceIn(0, 100)
         entry.setScene(ScheduleEntryFactory.createScene(sceneValue))
 
         Log.d(TAG, "ScheduleEntry 构建: action=$actionValue, scene=$sceneValue, dayOfWeek=${task.repeat}")
@@ -260,7 +262,13 @@ object SchedulerMessageHelper {
             }
 
             // 场景号映射回亮度（固件自定义扩展）
-            val brightness = if (sceneValue == 0 || sceneValue == 0xFFFF) 0 else sceneValue.coerceIn(0, 100)
+            // 设备里存的是 OC6701 补偿后的值，这里反算回 UI 百分比，
+            // 使详情页/列表/编辑页与路灯模式显示的是同一个百分比。
+            val brightness = if (sceneValue == 0xFFFF) {
+                0
+            } else {
+                MeshViewModel.unmapBrightnessForOC6701(sceneValue.coerceIn(0, 100))
+            }
 
             return SchedulerTask(
                 index = index,

@@ -258,7 +258,8 @@ class SchedulerEditActivity : ComponentActivity() {
         val minute = timePicker.minute
         val action = if (radioGroup.checkedRadioButtonId == R.id.radioOn)
             SchedulerTask.Action.ON else SchedulerTask.Action.OFF
-        val brightness = MeshViewModel.mapBrightnessForOC6701(seekBar.progress)
+        // 亮度统一保存为 UI 百分比，OC6701 补偿在 SchedulerMessageHelper 下发时统一处理
+        val brightness = seekBar.progress
         val enabled = switchEnabled.isChecked
 
         // 读取当前 repeat 值（从 checkboxes 计算）

@@ -168,28 +168,22 @@ class StreetlightModeActivity : ComponentActivity() {
             deviceTasks.values.toList(), deviceAddress
         ) ?: return
 
-        // 设备里存的是补偿后的亮度，显示时反算回 UI 百分比；
+        // 解析时已把设备里的 OC6701 补偿值反算成 UI 百分比，
         // 统一按 06:00 为起点排序，兼容旧版本按 00:00 下发到槽位的顺序。
         val deviceRaw = parsed.controlPoints
-        val devicePoints = deviceRaw
-            .map {
-                StreetlightProfile.ControlPoint(
-                    it.hour, it.minute,
-                    MeshViewModel.unmapBrightnessForOC6701(it.brightness)
-                )
-            }
-            .sortedBy { it.sortKey() }
+        val devicePoints = deviceRaw.sortedBy { it.sortKey() }
         if (devicePoints.size < 2) return
 
         // 如果设备上的任务就是本地曲线下发的结果，保留本地 UI 亮度值，
-        // 避免 100% 被反算成 99%/96% 这类显示偏差。
+        // 避免多对一映射反算带来的 ±1% 显示偏差。
         val localPoints = profile.controlPoints.sortedBy { it.sortKey() }
         val deviceMatchesLocal = localPoints.size == deviceRaw.size &&
             localPoints.all { local ->
                 val device = deviceRaw.firstOrNull {
                     it.hour == local.hour && it.minute == local.minute
                 } ?: return@all false
-                MeshViewModel.mapBrightnessForOC6701(local.brightness) == device.brightness
+                MeshViewModel.mapBrightnessForOC6701(local.brightness) ==
+                    MeshViewModel.mapBrightnessForOC6701(device.brightness)
             }
 
         val points = if (deviceMatchesLocal) localPoints else devicePoints
@@ -471,7 +465,7 @@ class StreetlightModeActivity : ComponentActivity() {
 
         // 启用时才下发控制点；关闭则只清空槽位
         if (profile.enabled) {
-            val tasks = profile.toSchedulerTasks(MeshViewModel.Companion::mapBrightnessForOC6701)
+            val tasks = profile.toSchedulerTasks()
             tasks.forEach { task ->
                 viewModel.setSchedulerTask(deviceAddress, task)
             }
