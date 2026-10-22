@@ -36,7 +36,9 @@ import no.nordicsemi.android.mesh.transport.VendorModelMessageAcked
 import no.nordicsemi.android.mesh.transport.VendorModelMessageStatus
 import com.example.ble_device_mesh.data.DeviceRepository
 import com.example.ble_device_mesh.data.DeviceType
+import com.example.ble_device_mesh.data.GroupRepository
 import com.example.ble_device_mesh.data.MeshDevice
+import com.example.ble_device_mesh.data.MeshGroup
 import com.example.ble_device_mesh.data.SchedulerTask
 
 /**
@@ -2495,6 +2497,22 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                     "bluetoothMac" to device.bluetoothMac
                 )
             }
+
+            // 分组也一起导出，另一台手机导入后可直接复用同样的分组和成员。
+            // 设备 id 各机不同（mesh_地址 / UUID），所以成员按单播地址导出，导入时再换算成本机 id。
+            val groups = GroupRepository(getApplication()).getAllGroups()
+            wrapper["groups"] = groups.map { group ->
+                val memberAddresses = group.memberDeviceIds.mapNotNull { id ->
+                    devices.firstOrNull { it.id == id }?.address
+                }
+                linkedMapOf(
+                    "name" to group.name,
+                    "address" to group.address,
+                    "memberAddresses" to memberAddresses,
+                    "createdAt" to group.createdAt
+                )
+            }
+
             return gson.toJson(wrapper)
         } catch (e: Exception) {
             Log.e("MeshApp", "导出设备元数据失败: ${e.message}")
@@ -2605,6 +2623,11 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         }
                     }
                 }
+
+                // 导入分组（成员的设备 id 各机不同，按单播地址换算成本机 id）
+                if (json.has("groups")) {
+                    importGroups(json.getJSONArray("groups"))
+                }
             } else {
                 // === 旧格式：纯 nRF Mesh JSON ===
                 importMeshNetwork(jsonData)
@@ -2616,6 +2639,68 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         } catch (e: Exception) {
             Log.e("MeshApp", "导入失败: ${e.message}")
             MeshState.statusText.postValue("导入失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 导入分组。
+     * 导出包里的成员用单播地址描述（设备 id 各机不同），这里换算成本机设备 id；
+     * 地址相同的分组视为同一个，只更新名称并合并成员，避免重复导入后出现重复分组。
+     */
+    private fun importGroups(groupsArray: org.json.JSONArray) {
+        val groupRepo = GroupRepository(getApplication())
+        val deviceRepo = DeviceRepository(getApplication())
+        val devicesByAddress = deviceRepo.getAllDevices().associateBy { it.address }
+
+        for (i in 0 until groupsArray.length()) {
+            val obj = groupsArray.optJSONObject(i) ?: continue
+            val address = obj.optInt("address", -1)
+            if (address < 0) continue
+            val name = obj.optString("name", "分组")
+
+            val memberAddresses = mutableListOf<Int>()
+            obj.optJSONArray("memberAddresses")?.let { arr ->
+                for (j in 0 until arr.length()) memberAddresses.add(arr.optInt(j))
+            }
+            val memberIds = memberAddresses.mapNotNull { devicesByAddress[it]?.id }.distinct()
+
+            val existing = groupRepo.getGroupByAddress(address)
+            val groupId = if (existing == null) {
+                val created = MeshGroup(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = name,
+                    address = address,
+                    memberDeviceIds = memberIds
+                )
+                groupRepo.addGroup(created)
+                created.id
+            } else {
+                groupRepo.updateGroup(
+                    existing.copy(
+                        name = name,
+                        memberDeviceIds = (existing.memberDeviceIds + memberIds).distinct()
+                    )
+                )
+                existing.id
+            }
+
+            // 设备侧回填分组 id / 主分组地址，主列表和详情页才能正确显示所属分组
+            memberIds.forEach { deviceId ->
+                val device = deviceRepo.getDeviceById(deviceId) ?: return@forEach
+                val ids = (device.groupIds ?: mutableListOf()).toMutableList()
+                var changed = false
+                if (groupId !in ids) {
+                    ids.add(groupId)
+                    device.groupIds = ids
+                    changed = true
+                }
+                if (device.groupAddress == null) {
+                    device.groupAddress = address
+                    changed = true
+                }
+                if (changed) deviceRepo.updateDevice(device)
+            }
+            Log.d("MeshApp", "已导入分组: $name (0x${address.toString(16)}), 成员 ${memberIds.size} 个")
         }
     }
     
