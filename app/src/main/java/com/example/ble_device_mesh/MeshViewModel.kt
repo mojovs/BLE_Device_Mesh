@@ -1478,6 +1478,26 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
+     * 只关闭光敏模式使能，不改阈值/亮度（用于工作模式互斥）
+     */
+    fun sendAutoLightDisable(elementAddress: Int) {
+        val network = MeshState.meshNetWork ?: run {
+            Log.e("MeshApp", "Mesh 网络未初始化"); return
+        }
+        val appKey = network.appKeys.firstOrNull() ?: run {
+            Log.e("MeshApp", "未找到 App Key"); return
+        }
+        try {
+            val onOffMsg = GenericOnOffSet(appKey, false, MeshState.currentTid++)
+            MeshState.meshManagerApi.createMeshPdu(elementAddress, onOffMsg)
+            MeshState.autoLightEnabledUpdates.postValue(Pair(elementAddress, 0))
+            Log.d("MeshApp", "发送光敏关闭(不改阈值) to elem=0x${elementAddress.toString(16)}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "发送光敏关闭失败: ${e.message}")
+        }
+    }
+
+    /**
      * 读取光敏模式状态（所有三个 Element）
      */
     fun readAutoLightMode(elementAddr1: Int) {

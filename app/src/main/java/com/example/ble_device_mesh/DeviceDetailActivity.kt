@@ -27,6 +27,7 @@ import android.widget.Toast
 import android.util.Log
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -67,6 +68,7 @@ class DeviceDetailActivity : ComponentActivity() {
     private var autoLightConfigReady = false  // 是否已从设备读到光敏配置（未读到前禁止下发，避免覆盖阈值）
     private var syncingWorkModeUi = false     // 程序化同步工作模式 UI 时阻断子卡片的回发
     private var deviceWorkMode = 0            // 当前工作模式: 0=关闭, 1=雷达, 2=定时, 3=光敏
+    private var lastModeActionAt = 0L         // 用户最近一次切换模式的时间（用于丢弃迟到的旧状态回包）
     private val resetFlowHandler = Handler(Looper.getMainLooper())
     private var pendingResetProbe = false  // 长按清除时正在探测固件版本
     private var firmwareProbeFailed = false  // 本次会话已确认设备不回版本（老固件）
@@ -1089,6 +1091,11 @@ class DeviceDetailActivity : ComponentActivity() {
         // 设备回报（切换模式、重连后读取）
         viewModel.getWorkMode().observe(this) { (src, mode) ->
             if (src == device.address) {
+                if (isModeStatusStale()) {
+                    // 切换前发出的读取请求，回包可能晚于用户操作，丢弃
+                    Log.d("DeviceDetail", "丢弃迟到的工作模式回包: $mode")
+                    return@observe
+                }
                 Log.d("DeviceDetail", "设备工作模式回报: $mode")
                 syncModeSwitches(mode)
             }
@@ -1130,6 +1137,50 @@ class DeviceDetailActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 用户主动切换模式后的统一处理：
+     * 1. 记录操作时间，此后一段时间内丢弃迟到的旧状态回包
+     * 2. 本地三个开关立即联动
+     * 3. 显式关闭另外两个模式的设备侧使能（双保险，兼容不支持工作模式的旧固件）
+     * 4. 800ms 后回读工作模式，以设备实际状态再校正一次界面
+     */
+    private fun applyUserMode(mode: Int) {
+        lastModeActionAt = SystemClock.elapsedRealtime()
+        Log.d("DeviceDetail", "用户切换模式: $mode -> 同步开关并关闭其他模式")
+        syncModeSwitches(mode)
+        sendOtherModesOff(mode)
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isFinishing && !isDestroyed && viewModel.isConnected.value == true) {
+                viewModel.readWorkMode(device.address)
+            }
+        }, 1800)
+    }
+
+    /**
+     * 显式关闭除 mode 以外两个模式的设备侧开关。
+     * 设备固件本身也做了互斥，这里是双保险：
+     * 即使设备跑的是没有工作模式的旧固件，也不会出现雷达和光敏同时生效。
+     */
+    private fun sendOtherModesOff(mode: Int) {
+        if (mode == MeshViewModel.WORK_MODE_OFF) return
+
+        if (mode != MeshViewModel.WORK_MODE_RADAR) {
+            Log.d("DeviceDetail", "模式互斥: 关闭雷达使能")
+            viewModel.sendRadarEnable(device.address + 4, 0)
+        }
+        if (mode != MeshViewModel.WORK_MODE_AUTO_LIGHT) {
+            // 只关使能，不改阈值，避免覆盖设备里已保存的光敏阈值
+            Log.d("DeviceDetail", "模式互斥: 关闭光敏使能")
+            viewModel.sendAutoLightDisable(device.address + 1)
+        }
+    }
+
+    /** 是否应该丢弃这条状态回包：刚切换过模式时，旧的回包还在路上 */
+    private fun isModeStatusStale(): Boolean {
+        return SystemClock.elapsedRealtime() - lastModeActionAt < 1500
+    }
+
     private fun setupScheduleCard() {
         val cardSchedule = findViewById<androidx.cardview.widget.CardView>(R.id.cardSchedule)
         cardSchedule.visibility = View.VISIBLE
@@ -1147,10 +1198,10 @@ class DeviceDetailActivity : ComponentActivity() {
             }
             if (isChecked) {
                 viewModel.sendWorkMode(device.address, MeshViewModel.WORK_MODE_TIMER)
-                syncModeSwitches(MeshViewModel.WORK_MODE_TIMER)
+                applyUserMode(MeshViewModel.WORK_MODE_TIMER)
             } else if (deviceWorkMode == MeshViewModel.WORK_MODE_TIMER) {
                 viewModel.sendWorkMode(device.address, MeshViewModel.WORK_MODE_OFF)
-                syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+                applyUserMode(MeshViewModel.WORK_MODE_OFF)
             }
         }
 
@@ -1302,9 +1353,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 val sent = sendAutoLightConfig()
                 // 打开光敏 = 选中光敏模式；关闭时若当前就是光敏模式则回到"关闭"
                 if (sent && isChecked) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_AUTO_LIGHT)
+                    applyUserMode(MeshViewModel.WORK_MODE_AUTO_LIGHT)
                 } else if (sent && deviceWorkMode == MeshViewModel.WORK_MODE_AUTO_LIGHT) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+                    applyUserMode(MeshViewModel.WORK_MODE_OFF)
                 }
             }
         }
@@ -1338,6 +1389,11 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察使能状态
         viewModel.getAutoLightEnabled().observe(this) { (src, enabled) ->
             if (src == elem1Addr) {
+                if (isModeStatusStale()) {
+                    // 刚切换过模式，这条可能是切换前发出的旧回包，丢弃以免把开关改回去
+                    Log.d("DeviceDetail", "丢弃迟到的光敏状态回包: enabled=$enabled")
+                    return@observe
+                }
                 updatingAutoLightSwitch = true
                 switchAutoLight.isChecked = enabled == 1
                 updatingAutoLightSwitch = false
@@ -1650,9 +1706,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 deviceRepository.updateDevice(device)
                 // 打开雷达 = 选中雷达模式；关闭时若当前就是雷达模式则回到"关闭"
                 if (isChecked) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_RADAR)
+                    applyUserMode(MeshViewModel.WORK_MODE_RADAR)
                 } else if (deviceWorkMode == MeshViewModel.WORK_MODE_RADAR) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+                    applyUserMode(MeshViewModel.WORK_MODE_OFF)
                 }
             }
         }
@@ -1739,6 +1795,11 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察雷达启用状态
         viewModel.getRadarStatus().observe(this) { (src, enabled) ->
             if (src == elem4Addr) {
+                if (isModeStatusStale()) {
+                    // 刚切换过模式，这条可能是切换前发出的旧回包，丢弃以免把雷达开关改回开
+                    Log.d("DeviceDetail", "丢弃迟到的雷达状态回包: enabled=$enabled")
+                    return@observe
+                }
                 // 程序化同步开关状态，避免触发 switch 监听回发命令
                 val prevSyncing = syncingWorkModeUi
                 syncingWorkModeUi = true
