@@ -212,20 +212,6 @@
                             android:minWidth="0dp"
                             android:minHeight="0dp" />
 
-                        <Button
-                            android:id="@+id/btnLoadStreetlight"
-                            android:layout_width="wrap_content"
-                            android:layout_height="38dp"
-                            android:layout_marginStart="10dp"
-                            android:text="加载路灯曲线"
-                            android:textSize="13sp"
-                            android:backgroundTint="#1976D2"
-                            android:textColor="#FFFFFF"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp" />
-
                     </LinearLayout>
 
                     <LinearLayout

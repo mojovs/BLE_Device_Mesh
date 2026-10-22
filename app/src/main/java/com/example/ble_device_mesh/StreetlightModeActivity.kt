@@ -102,8 +102,7 @@ class StreetlightModeActivity : ComponentActivity() {
         btnToggleNightMode = findViewById(R.id.btnToggleNightMode)
         updateNightModeButton()
 
-        // 加载路灯曲线按钮
-        findViewById<Button>(R.id.btnLoadStreetlight).setOnClickListener { loadStreetlightCurve() }
+        // 加载/保存曲线预设
         findViewById<Button>(R.id.btnSavePreset).setOnClickListener { saveCurrentAsPreset() }
         findViewById<Button>(R.id.btnLoadPreset).setOnClickListener { showLoadPresetDialog() }
 
@@ -498,32 +497,6 @@ class StreetlightModeActivity : ComponentActivity() {
                 adapter.updatePoints(curveView.getSortedPoints())
                 updateStatus()
                 Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    /**
-     * 加载路灯曲线预设
-     * 18:00 100% → 20:00 60% → 22:00 30% → 23:00 10% → 06:00 0%
-     */
-    private fun loadStreetlightCurve() {
-        AlertDialog.Builder(this)
-            .setTitle("加载路灯曲线")
-            .setMessage("将加载预设的路灯曲线（傍晚亮灯→深夜渐暗→清晨关闭），是否继续？")
-            .setPositiveButton("加载") { _, _ ->
-                val streetlightPoints = listOf(
-                    StreetlightProfile.ControlPoint(18, 0, 100),  // 18:00 100%
-                    StreetlightProfile.ControlPoint(20, 0, 60),   // 20:00 60%
-                    StreetlightProfile.ControlPoint(22, 0, 30),   // 22:00 30%
-                    StreetlightProfile.ControlPoint(23, 0, 10),   // 23:00 10%
-                    StreetlightProfile.ControlPoint(6, 0, 0)      // 06:00 关灯
-                )
-
-                curveView.controlPoints = streetlightPoints.toMutableList()
-                refreshListFromCurve()
-                updateStatus()
-                Toast.makeText(this, "已加载路灯曲线，可继续编辑", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
