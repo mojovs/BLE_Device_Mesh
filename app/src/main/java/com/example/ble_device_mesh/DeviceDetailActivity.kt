@@ -64,6 +64,7 @@ class DeviceDetailActivity : ComponentActivity() {
     private var pendingNewPassword: String? = null  // PWD_SET 成功后写入本地存储
     private var devicePasswordIsSet = false  // 来自设备 PWD_STATUS 的 is_set
     private var devicePasswordStatusKnown = false  // 是否已收到过 PWD_STATUS
+    private var autoLightConfigReady = false  // 是否已从设备读到光敏配置（未读到前禁止下发，避免覆盖阈值）
     private val resetFlowHandler = Handler(Looper.getMainLooper())
     private var pendingResetProbe = false  // 长按清除时正在探测固件版本
     private var firmwareProbeFailed = false  // 本次会话已确认设备不回版本（老固件）
@@ -1157,13 +1158,26 @@ class DeviceDetailActivity : ComponentActivity() {
         val elem1Addr = device.address + 1  // OnOff + Level(阈值)
         val elem2Addr = device.address + 2  // Level(亮度)
 
-        // 默认状态
-        switchAutoLight.isChecked = false
-        seekBarThreshold.progress = 50
-        tvThreshold.text = "50%"
-        seekBarBrightness.progress = 100
-        tvBrightness.text = "100%"
+        // 默认状态：优先使用上次从设备读到的缓存
+        autoLightConfigReady = device.autoLightConfigured
+        val initialThreshold = if (autoLightConfigReady) device.autoLightThreshold.coerceIn(0, 100) else 50
+        val initialBrightness = if (autoLightConfigReady) device.autoLightBrightness.coerceIn(1, 100) else 100
+        switchAutoLight.isChecked = autoLightConfigReady && device.autoLightEnabled
+        seekBarThreshold.progress = initialThreshold
+        tvThreshold.text = "$initialThreshold%"
+        seekBarBrightness.progress = initialBrightness
+        tvBrightness.text = "$initialBrightness%"
         tvState.text = "--"
+
+        // 未成功读到设备配置前禁止修改：否则 App 会用默认 50% 阈值覆盖设备实际配置
+        fun refreshAutoLightEnabledState() {
+            val connected = viewModel.isConnected.value == true
+            val configurable = connected && !isTimeSyncInProgress && autoLightConfigReady
+            switchAutoLight.isEnabled = configurable
+            seekBarThreshold.isEnabled = configurable
+            seekBarBrightness.isEnabled = configurable
+            btnRead.isEnabled = connected && !isTimeSyncInProgress
+        }
 
         // 阈值滑块
         seekBarThreshold.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -1188,6 +1202,9 @@ class DeviceDetailActivity : ComponentActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 val brightness = if (seekBarBrightness.progress < 1) 1 else seekBarBrightness.progress
                 if (viewModel.isConnected.value == true) {
+                    // 缓存的是 UI 百分比；设备里存的是 OC6701 映射后的值
+                    device.autoLightBrightness = brightness
+                    deviceRepository.updateDevice(device)
                     viewModel.sendAutoLightBrightness(elem2Addr, brightness)
                 }
             }
@@ -1212,11 +1229,18 @@ class DeviceDetailActivity : ComponentActivity() {
         }
 
         // 观察光敏模式状态：仅更新阈值（开关由 getAutoLightEnabled 独立控制）
+        // 只认 Element 1（主地址+1）：主灯(Element 0)的 Level Status 不能当成阈值。
         viewModel.getAutoLightStatus().observe(this) { (src, enabled, threshold) ->
-            if (src == elem1Addr || src == device.address) {
-                seekBarThreshold.progress = threshold
-                tvThreshold.text = "$threshold%"
-                Log.d("DeviceDetail", "光敏模式阈值已更新: threshold=$threshold%")
+            if (src == elem1Addr) {
+                autoLightConfigReady = true
+                val t = threshold.coerceIn(0, 100)
+                device.autoLightThreshold = t
+                device.autoLightConfigured = true
+                seekBarThreshold.progress = t
+                tvThreshold.text = "$t%"
+                deviceRepository.updateDevice(device)
+                refreshAutoLightEnabledState()
+                Log.d("DeviceDetail", "光敏模式阈值已更新: threshold=$t%")
             }
         }
 
@@ -1226,6 +1250,8 @@ class DeviceDetailActivity : ComponentActivity() {
                 updatingAutoLightSwitch = true
                 switchAutoLight.isChecked = enabled == 1
                 updatingAutoLightSwitch = false
+                device.autoLightEnabled = enabled == 1
+                deviceRepository.updateDevice(device)
                 com.example.ble_device_mesh.MeshViewModel.MeshState.statusText.postValue("光敏模式: ${if (enabled == 1) "已开启" else "已关闭"}")
             }
         }
@@ -1233,18 +1259,34 @@ class DeviceDetailActivity : ComponentActivity() {
         // 观察开灯亮度
         viewModel.getAutoLightBrightness().observe(this) { (src, brightness) ->
             if (src == elem2Addr) {
-                val bri = brightness.coerceIn(1, 100)
-                seekBarBrightness.progress = bri
-                tvBrightness.text = "$bri%"
+                val devicePct = brightness.coerceIn(1, 100)
+                // 设备里存的是 OC6701 补偿后的百分比，界面显示的是 UI 百分比。
+                // 若设备值与当前 UI 的映射一致就保持 UI 不变，避免读取时滑块跳变。
+                val cachedUi = device.autoLightBrightness.coerceIn(1, 100)
+                val ui = if (autoLightConfigReady && MeshViewModel.mapBrightnessForOC6701(cachedUi) == devicePct) {
+                    cachedUi
+                } else {
+                    MeshViewModel.unmapBrightnessForOC6701(devicePct)
+                }
+                seekBarBrightness.progress = ui
+                tvBrightness.text = "$ui%"
+                device.autoLightBrightness = ui
+                deviceRepository.updateDevice(device)
             }
         }
 
         // 连接状态改变时更新按钮启用
         viewModel.isConnected.observe(this) { connected ->
-            btnRead.isEnabled = connected && !isTimeSyncInProgress
-            switchAutoLight.isEnabled = connected && !isTimeSyncInProgress
-            seekBarThreshold.isEnabled = connected && !isTimeSyncInProgress
-            seekBarBrightness.isEnabled = connected && !isTimeSyncInProgress
+            refreshAutoLightEnabledState()
+            if (connected && !autoLightConfigReady) {
+                // 首次打开/无本地缓存：自动读取一次设备配置，
+                // 读到阈值后才允许操作，避免用默认值覆盖设备配置。
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (viewModel.isConnected.value == true && !autoLightConfigReady) {
+                        viewModel.readAutoLightMode(elem1Addr)
+                    }
+                }, 600)
+            }
         }
     }
 
@@ -1257,6 +1299,15 @@ class DeviceDetailActivity : ComponentActivity() {
         val seekBarThreshold = findViewById<SeekBar>(R.id.seekBarAutoLightThreshold)
         val enable = if (switchAutoLight.isChecked) 1 else 0
         val threshold = seekBarThreshold.progress
+        // 未读到设备配置前不要下发，避免把默认阈值写到设备
+        if (!autoLightConfigReady) {
+            Toast.makeText(this, "正在读取设备配置，请稍后再试", Toast.LENGTH_SHORT).show()
+            viewModel.readAutoLightMode(device.address + 1)
+            return
+        }
+        device.autoLightEnabled = switchAutoLight.isChecked
+        device.autoLightThreshold = threshold
+        deviceRepository.updateDevice(device)
         // 光敏模式使用 Element 1 地址
         viewModel.sendAutoLightMode(device.address + 1, enable, threshold)
     }

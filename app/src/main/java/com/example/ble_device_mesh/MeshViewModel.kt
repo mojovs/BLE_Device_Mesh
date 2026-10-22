@@ -1515,14 +1515,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
         val bri = brightness.coerceIn(1, 100)
         val mappedBrightness = mapBrightnessForOC6701(bri)
-        val level = ((mappedBrightness - 50) * 655.35).toInt()
         Log.d(
             "MeshApp",
-            "发送自动开灯亮度: UI=$bri%, mapped=$mappedBrightness%, level=$level to 0x${elementAddr2.toString(16)}"
+            "发送自动开灯亮度: UI=$bri%, mapped=$mappedBrightness% to 0x${elementAddr2.toString(16)}"
         )
 
         try {
-            val msg = GenericLevelSetUnacknowledged(appKey, level, MeshState.currentTid++)
+            // Element 2 固件按"原始百分比"解析（不是标准 mesh level）：
+            // app_scheduler_model.c 的 auto_light_brightness_set 直接取 le16 当 0-100% 用。
+            // 因此这里必须发 mappedBrightness（0-100），不能做 (level-50)*655.35 换算，
+            // 否则 <=77% 会被固件截成 1%，>=78% 会被截成 100%。
+            val msg = GenericLevelSetUnacknowledged(appKey, mappedBrightness, MeshState.currentTid++)
             MeshState.meshManagerApi.createMeshPdu(elementAddr2, msg)
         } catch (e: Exception) {
             Log.e("MeshApp", "发送开灯亮度失败: ${e.message}")

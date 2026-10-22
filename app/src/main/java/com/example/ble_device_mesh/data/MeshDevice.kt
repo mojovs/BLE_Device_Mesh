@@ -28,7 +28,11 @@ data class MeshDevice(
     var radarNightStartHour: Int = 18,  // 夜晚开始小时
     var radarNightEndHour: Int = 6,  // 夜晚结束小时
     var radarSoundEnabled: Boolean = true,  // 检测提示音开关
-    var radarSoundVolume: Int = 100  // 检测提示音音量 0-100
+    var radarSoundVolume: Int = 100,  // 检测提示音音量 0-100
+    var autoLightEnabled: Boolean = false,  // 光敏模式开关（本地缓存）
+    var autoLightThreshold: Int = 50,  // 光敏"开灯感应"0-100
+    var autoLightBrightness: Int = 100,  // 光敏开灯亮度（UI 百分比）1-100
+    var autoLightConfigured: Boolean = false  // 是否已成功从设备读取过光敏配置
 ) : Parcelable
 
 enum class DeviceType {
