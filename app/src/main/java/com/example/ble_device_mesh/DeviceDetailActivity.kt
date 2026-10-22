@@ -20,7 +20,6 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -929,8 +928,8 @@ class DeviceDetailActivity : ComponentActivity() {
             setupAutoLightCard()
             setupBuzzerCard()
             setupRadarCard()
-            // 工作模式卡片最后初始化：先让子卡片完成默认状态，再按模式统一同步
-            setupWorkModeCard()
+            // 各子卡片的开关互相联动：打开一个模式自动关闭另外两个
+            setupModeSync()
 
             // 添加定时任务管理按钮
             val btnSchedulerManager = findViewById<Button>(R.id.btnSchedulerManager)
@@ -1052,7 +1051,7 @@ class DeviceDetailActivity : ComponentActivity() {
         findViewById<Button>(R.id.btnTestBuzzer)?.isEnabled = enabled
         findViewById<Button>(R.id.btnReadBuzzer)?.isEnabled = enabled
         findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)?.isEnabled = enabled
-        findViewById<RadioGroup>(R.id.rgWorkMode)?.isEnabled = enabled
+        findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchScheduleEnable)?.isEnabled = enabled
         findViewById<SeekBar>(R.id.seekBarRadarDuration)?.isEnabled = enabled
         findViewById<SeekBar>(R.id.seekBarRadarBrightness)?.isEnabled = enabled
         findViewById<Button>(R.id.btnRadarNightStart)?.isEnabled = enabled
@@ -1079,72 +1078,34 @@ class DeviceDetailActivity : ComponentActivity() {
     }
 
     /**
-     * 工作模式卡片：雷达 / 定时 / 光敏 三选一互斥
+     * 工作模式联动：雷达 / 定时 / 光敏 三选一互斥
      *
-     * 只有选中的模式会生效；切换模式不会清空其他模式的参数。
-     * 雷达/光敏子卡片的开关作为模式状态的镜像（打开即选中对应模式）。
+     * 不额外增加“工作模式”卡片，直接复用各卡片自己的开关：
+     * 打开任意一个模式开关，另外两个自动关闭（参数保留）。
      */
-    private fun setupWorkModeCard() {
-        val card = findViewById<androidx.cardview.widget.CardView>(R.id.cardWorkMode)
-        card.visibility = View.VISIBLE
-
-        val rg = findViewById<RadioGroup>(R.id.rgWorkMode)
-
+    private fun setupModeSync() {
         deviceWorkMode = device.workMode.coerceIn(0, 3)
-
-        rg.setOnCheckedChangeListener { _, checkedId ->
-            if (syncingWorkModeUi) return@setOnCheckedChangeListener
-
-            val mode = when (checkedId) {
-                R.id.rbWorkModeRadar -> MeshViewModel.WORK_MODE_RADAR
-                R.id.rbWorkModeTimer -> MeshViewModel.WORK_MODE_TIMER
-                R.id.rbWorkModeLight -> MeshViewModel.WORK_MODE_AUTO_LIGHT
-                else -> MeshViewModel.WORK_MODE_OFF
-            }
-
-            if (viewModel.isConnected.value != true) {
-                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
-                applyWorkModeUi(deviceWorkMode)
-                return@setOnCheckedChangeListener
-            }
-
-            Log.d("DeviceDetail", "用户选择工作模式: $mode")
-            viewModel.sendWorkMode(device.address, mode)
-            applyWorkModeUi(mode)
-        }
 
         // 设备回报（切换模式、重连后读取）
         viewModel.getWorkMode().observe(this) { (src, mode) ->
             if (src == device.address) {
                 Log.d("DeviceDetail", "设备工作模式回报: $mode")
-                applyWorkModeUi(mode)
+                syncModeSwitches(mode)
             }
         }
 
         // 先用本地缓存渲染一次，避免等待回包期间显示错误状态
-        applyWorkModeUi(deviceWorkMode)
-
-        rg.isEnabled = viewModel.isConnected.value == true && !isTimeSyncInProgress
-        viewModel.isConnected.observe(this) { connected ->
-            rg.isEnabled = connected && !isTimeSyncInProgress
-        }
-    }
-
-    private fun workModeLabel(mode: Int): String = when (mode) {
-        MeshViewModel.WORK_MODE_RADAR -> "雷达"
-        MeshViewModel.WORK_MODE_TIMER -> "定时"
-        MeshViewModel.WORK_MODE_AUTO_LIGHT -> "光敏"
-        else -> "关闭"
+        syncModeSwitches(deviceWorkMode)
     }
 
     /**
-     * 同步工作模式相关 UI（不发送任何 Mesh 命令）：
-     * - 工作模式单选项
-     * - 雷达/光敏子卡片开关（仅显示，不回发）
+     * 同步三个模式开关的显示状态（不发送任何 Mesh 命令）。
+     * 打开一个模式时，另外两个开关会在这里被自动关闭。
      */
-    private fun applyWorkModeUi(mode: Int) {
+    private fun syncModeSwitches(mode: Int) {
         val m = mode.coerceIn(0, 3)
         val radarOn = (m == MeshViewModel.WORK_MODE_RADAR)
+        val timerOn = (m == MeshViewModel.WORK_MODE_TIMER)
         val lightOn = (m == MeshViewModel.WORK_MODE_AUTO_LIGHT)
 
         deviceWorkMode = m
@@ -1158,18 +1119,10 @@ class DeviceDetailActivity : ComponentActivity() {
 
         syncingWorkModeUi = true
         try {
-            val rg = findViewById<RadioGroup>(R.id.rgWorkMode)
-            rg?.check(when (m) {
-                MeshViewModel.WORK_MODE_RADAR -> R.id.rbWorkModeRadar
-                MeshViewModel.WORK_MODE_TIMER -> R.id.rbWorkModeTimer
-                MeshViewModel.WORK_MODE_AUTO_LIGHT -> R.id.rbWorkModeLight
-                else -> R.id.rbWorkModeOff
-            })
-            findViewById<TextView>(R.id.tvWorkModeCurrent)?.text = workModeLabel(m)
-
-            // 子卡片开关与本地缓存都跟随工作模式
             findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)?.isChecked =
                 radarOn
+            findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchScheduleEnable)?.isChecked =
+                timerOn
             findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)?.isChecked =
                 lightOn
         } finally {
@@ -1181,6 +1134,25 @@ class DeviceDetailActivity : ComponentActivity() {
         val cardSchedule = findViewById<androidx.cardview.widget.CardView>(R.id.cardSchedule)
         cardSchedule.visibility = View.VISIBLE
         setupCollapsible(R.id.headerSchedule, R.id.bodySchedule, R.id.iconSchedule, false)
+
+        // 定时模式开关：打开后选中“定时”模式，自动关闭雷达/光敏
+        val switchScheduleEnable =
+            findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchScheduleEnable)
+        switchScheduleEnable.setOnCheckedChangeListener { _, isChecked ->
+            if (syncingWorkModeUi) return@setOnCheckedChangeListener
+            if (viewModel.isConnected.value != true) {
+                Toast.makeText(this, "请先连接设备", Toast.LENGTH_SHORT).show()
+                syncModeSwitches(deviceWorkMode)
+                return@setOnCheckedChangeListener
+            }
+            if (isChecked) {
+                viewModel.sendWorkMode(device.address, MeshViewModel.WORK_MODE_TIMER)
+                syncModeSwitches(MeshViewModel.WORK_MODE_TIMER)
+            } else if (deviceWorkMode == MeshViewModel.WORK_MODE_TIMER) {
+                viewModel.sendWorkMode(device.address, MeshViewModel.WORK_MODE_OFF)
+                syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+            }
+        }
 
         // Scheduler 模型读取
         val btnReadScheduler = findViewById<Button>(R.id.btnReadScheduler)
@@ -1327,12 +1299,12 @@ class DeviceDetailActivity : ComponentActivity() {
         var updatingAutoLightSwitch = false
         switchAutoLight.setOnCheckedChangeListener { _, isChecked ->
             if (!updatingAutoLightSwitch && !syncingWorkModeUi && viewModel.isConnected.value == true) {
-                sendAutoLightConfig()
+                val sent = sendAutoLightConfig()
                 // 打开光敏 = 选中光敏模式；关闭时若当前就是光敏模式则回到"关闭"
-                if (isChecked) {
-                    applyWorkModeUi(MeshViewModel.WORK_MODE_AUTO_LIGHT)
-                } else if (deviceWorkMode == MeshViewModel.WORK_MODE_AUTO_LIGHT) {
-                    applyWorkModeUi(MeshViewModel.WORK_MODE_OFF)
+                if (sent && isChecked) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_AUTO_LIGHT)
+                } else if (sent && deviceWorkMode == MeshViewModel.WORK_MODE_AUTO_LIGHT) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
                 }
             }
         }
@@ -1371,6 +1343,12 @@ class DeviceDetailActivity : ComponentActivity() {
                 updatingAutoLightSwitch = false
                 device.autoLightEnabled = enabled == 1
                 deviceRepository.updateDevice(device)
+                // 设备侧光敏使能就是工作模式镜像：同步另外两个模式开关
+                if (enabled == 1 && deviceWorkMode != MeshViewModel.WORK_MODE_AUTO_LIGHT) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_AUTO_LIGHT)
+                } else if (enabled == 0 && deviceWorkMode == MeshViewModel.WORK_MODE_AUTO_LIGHT) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+                }
                 com.example.ble_device_mesh.MeshViewModel.MeshState.statusText.postValue("光敏模式: ${if (enabled == 1) "已开启" else "已关闭"}")
             }
         }
@@ -1413,7 +1391,7 @@ class DeviceDetailActivity : ComponentActivity() {
      * 发送光敏模式配置
      * 光敏模式在 Element 1 上（地址 = 主地址 + 1）
      */
-    private fun sendAutoLightConfig() {
+    private fun sendAutoLightConfig(): Boolean {
         val switchAutoLight = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)
         val seekBarThreshold = findViewById<SeekBar>(R.id.seekBarAutoLightThreshold)
         val enable = if (switchAutoLight.isChecked) 1 else 0
@@ -1422,13 +1400,14 @@ class DeviceDetailActivity : ComponentActivity() {
         if (!autoLightConfigReady) {
             Toast.makeText(this, "正在读取设备配置，请稍后再试", Toast.LENGTH_SHORT).show()
             viewModel.readAutoLightMode(device.address + 1)
-            return
+            return false
         }
         device.autoLightEnabled = switchAutoLight.isChecked
         device.autoLightThreshold = threshold
         deviceRepository.updateDevice(device)
         // 光敏模式使用 Element 1 地址
         viewModel.sendAutoLightMode(device.address + 1, enable, threshold)
+        return true
     }
 
     /**
@@ -1671,9 +1650,9 @@ class DeviceDetailActivity : ComponentActivity() {
                 deviceRepository.updateDevice(device)
                 // 打开雷达 = 选中雷达模式；关闭时若当前就是雷达模式则回到"关闭"
                 if (isChecked) {
-                    applyWorkModeUi(MeshViewModel.WORK_MODE_RADAR)
+                    syncModeSwitches(MeshViewModel.WORK_MODE_RADAR)
                 } else if (deviceWorkMode == MeshViewModel.WORK_MODE_RADAR) {
-                    applyWorkModeUi(MeshViewModel.WORK_MODE_OFF)
+                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
                 }
             }
         }
@@ -1767,6 +1746,12 @@ class DeviceDetailActivity : ComponentActivity() {
                 syncingWorkModeUi = prevSyncing
                 device.radarEnabled = enabled == 1
                 deviceRepository.updateDevice(device)
+                // 设备侧雷达使能就是工作模式镜像：同步另外两个模式开关
+                if (enabled == 1 && deviceWorkMode != MeshViewModel.WORK_MODE_RADAR) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_RADAR)
+                } else if (enabled == 0 && deviceWorkMode == MeshViewModel.WORK_MODE_RADAR) {
+                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
+                }
             }
         }
 
