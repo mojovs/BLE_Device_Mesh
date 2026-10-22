@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.app.TimePickerDialog
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -549,10 +550,48 @@ class StreetlightModeActivity : ComponentActivity() {
             return
         }
 
-        val items = presets.map { "${it.name}\n${it.getDescription()}" }.toTypedArray()
+        // 每条预设用不同的淡色底栏区分，避免多条预设挤在一起看不清
+        val rowColors = intArrayOf(
+            0xFFFFF4E5.toInt(), // 淡橙
+            0xFFE8F5E9.toInt(), // 淡绿
+            0xFFE3F2FD.toInt(), // 淡蓝
+            0xFFF3E5F5.toInt(), // 淡紫
+            0xFFFFF8E1.toInt()  // 淡黄
+        )
+        val cornerRadius = 10 * resources.displayMetrics.density
+        val density = resources.displayMetrics.density
+
+        val adapter = object : BaseAdapter() {
+            override fun getCount(): Int = presets.size
+            override fun getItem(position: Int): Any = presets[position]
+            override fun getItemId(position: Int): Long = position.toLong()
+
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val view = convertView
+                    ?: layoutInflater.inflate(R.layout.item_streetlight_preset, parent, false)
+                val preset = presets[position]
+
+                view.findViewById<View>(R.id.presetRow).apply {
+                    background = GradientDrawable().apply {
+                        this.cornerRadius = cornerRadius
+                        setColor(rowColors[position % rowColors.size])
+                    }
+                    setPadding(
+                        (14 * density).toInt(),
+                        (10 * density).toInt(),
+                        (14 * density).toInt(),
+                        (10 * density).toInt()
+                    )
+                }
+                view.findViewById<TextView>(R.id.tvPresetName).text = preset.name
+                view.findViewById<TextView>(R.id.tvPresetDesc).text = preset.getDescription()
+                return view
+            }
+        }
+
         AlertDialog.Builder(this)
             .setTitle("加载预设")
-            .setItems(items) { _, which ->
+            .setAdapter(adapter) { _, which ->
                 val preset = presets[which]
                 curveView.clearSelection()
                 curveView.controlPoints = preset.controlPoints.toMutableList()
