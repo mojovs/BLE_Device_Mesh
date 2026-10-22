@@ -108,7 +108,6 @@ class StreetlightModeActivity : ComponentActivity() {
         findViewById<Button>(R.id.btnLoadPreset).setOnClickListener { showLoadPresetDialog() }
 
         // 按钮
-        findViewById<Button>(R.id.btnSave).setOnClickListener { saveProfile() }
         findViewById<Button>(R.id.btnSendToDevice).setOnClickListener { sendToDevice() }
         findViewById<Button>(R.id.btnResetDefault).setOnClickListener { resetToDefault() }
 
@@ -249,16 +248,21 @@ class StreetlightModeActivity : ComponentActivity() {
         // 启用开关
         switchEnabled.setOnCheckedChangeListener { _, isChecked ->
             profile = profile.copy(enabled = isChecked)
+            persistProfile()
             updateStatus()
         }
     }
 
     /**
-     * 从曲线视图同步刷新控制点列表
+     * 从曲线视图同步刷新控制点列表。
+     * 页面不再有独立的“保存应用”按钮，曲线一变就写回本地缓存，
+     * 避免编辑后没点下发就退出导致改动丢失。
      */
     private fun refreshListFromCurve() {
         val sorted = curveView.getSortedPoints()
         adapter.updatePoints(sorted)
+        profile = profile.copy(controlPoints = sorted, enabled = switchEnabled.isChecked)
+        persistProfile()
     }
 
     private fun updateStatus() {
@@ -361,24 +365,6 @@ class StreetlightModeActivity : ComponentActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
-    }
-
-    private fun saveProfile() {
-        curveView.clearSelection()
-
-        profile = profile.copy(
-            controlPoints = curveView.getSortedPoints(),
-            enabled = switchEnabled.isChecked
-        )
-
-        // 保存到本地 SharedPreferences
-        persistProfile()
-
-        // 刷新控制点列表
-        refreshListFromCurve()
-        updateStatus()
-
-        Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
     }
 
     private fun loadFromDevice() {
@@ -496,6 +482,7 @@ class StreetlightModeActivity : ComponentActivity() {
                 curveView.controlPoints = profile.controlPoints.toMutableList()
                 switchEnabled.isChecked = profile.enabled
                 adapter.updatePoints(curveView.getSortedPoints())
+                persistProfile()
                 updateStatus()
                 Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show()
             }

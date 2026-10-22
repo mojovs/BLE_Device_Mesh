@@ -91,56 +91,47 @@
                 android:orientation="horizontal">
 
                 <Button
-                    android:id="@+id/btnSave"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="8dp"
-                    android:text="保存应用"
-                    android:backgroundTint="#00897B"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp" />
-
-                <Button
                     android:id="@+id/btnSendToDevice"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="42dp"
                     android:layout_weight="1"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
                     android:text="下发到设备"
                     android:backgroundTint="#FF9800"
                     android:textColor="#FFFFFF"
-                    android:textSize="14sp" />
-
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal">
+                    android:textSize="12sp" />
 
                 <Button
                     android:id="@+id/btnSavePreset"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="42dp"
                     android:layout_weight="1"
-                    android:layout_marginEnd="8dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
                     android:text="保存曲线预设"
                     android:backgroundTint="#1976D2"
                     android:textColor="#FFFFFF"
-                    android:textSize="14sp" />
+                    android:textSize="12sp" />
 
                 <Button
                     android:id="@+id/btnLoadPreset"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="42dp"
                     android:layout_weight="1"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
                     android:text="加载曲线预设"
                     android:backgroundTint="#455A64"
                     android:textColor="#FFFFFF"
-                    android:textSize="14sp" />
+                    android:textSize="12sp" />
 
             </LinearLayout>
 
@@ -197,40 +188,35 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginBottom="8dp">
+                        android:layout_marginBottom="12dp">
 
                         <Button
                             android:id="@+id/btnAddPoint"
-                            android:layout_width="wrap_content"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
                             android:layout_height="38dp"
+                            android:layout_marginEnd="6dp"
                             android:text="+ 添加控制点"
                             android:textSize="13sp"
                             android:backgroundTint="#FF6B35"
                             android:textColor="#FFFFFF"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
                             android:minWidth="0dp"
                             android:minHeight="0dp" />
 
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginBottom="12dp">
-
                         <Button
                             android:id="@+id/btnToggleNightMode"
-                            android:layout_width="wrap_content"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
                             android:layout_height="38dp"
-                            android:layout_marginStart="10dp"
+                            android:layout_marginStart="6dp"
                             android:text="聚焦夜间"
                             android:textSize="13sp"
                             android:backgroundTint="#7B1FA2"
                             android:textColor="#FFFFFF"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
                             android:minWidth="0dp"
                             android:minHeight="0dp" />
 
