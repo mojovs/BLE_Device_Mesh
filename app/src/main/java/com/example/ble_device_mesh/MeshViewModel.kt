@@ -4196,19 +4196,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
 
         /**
          * 反向映射：设备里保存的亮度（已做 OC6701 补偿）→ UI 百分比。
-         * 映射表是多对一（如 UI 58~60% 都对应 25%），这里取最接近的 UI 值。
+         * 映射表是多对一（如 UI 49/50% 都对应 15%），取最接近的 UI 值；
+         * 有多个等距候选时取较大的那个，这样 50%、100% 这类整值能原样还原。
          */
         fun unmapBrightnessForOC6701(deviceBrightness: Int): Int {
             val target = deviceBrightness.coerceIn(0, 100)
+            // 0 表示关灯（UI 0~15% 都会映射成 0），直接返回 0
+            if (target == 0) return 0
             var best = 0
             var bestDiff = Int.MAX_VALUE
             for (ui in 0..100) {
                 val diff = kotlin.math.abs(mapBrightnessForOC6701(ui) - target)
-                if (diff < bestDiff) {
+                if (diff < bestDiff || (diff == bestDiff && ui > best)) {
                     bestDiff = diff
                     best = ui
                 }
-                if (bestDiff == 0) break
             }
             return best
         }
