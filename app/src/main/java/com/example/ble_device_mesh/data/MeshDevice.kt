@@ -32,7 +32,8 @@ data class MeshDevice(
     var autoLightEnabled: Boolean = false,  // 光敏模式开关（本地缓存）
     var autoLightThreshold: Int = 50,  // 光敏"开灯感应"0-100
     var autoLightBrightness: Int = 100,  // 光敏开灯亮度（UI 百分比）1-100
-    var autoLightConfigured: Boolean = false  // 是否已成功从设备读取过光敏配置
+    var autoLightConfigured: Boolean = false,  // 是否已成功从设备读取过光敏配置
+    var workMode: Int = 0  // 工作模式: 0=关闭, 1=雷达, 2=定时, 3=光敏（本地缓存）
 ) : Parcelable
 
 enum class DeviceType {

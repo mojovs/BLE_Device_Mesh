@@ -97,6 +97,9 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         // 设备密码
         val passwordStatusUpdates = MutableLiveData<Pair<Int, Int>>() // Pair<src, is_set(0/1)>
         val passwordOpResult = MutableLiveData<Event<Triple<Int, Int, Int>>>() // Triple<src, op, rc>
+
+        // 工作模式：Pair<src, mode>  0=关闭, 1=雷达, 2=定时, 3=光敏
+        val workModeUpdates = MutableLiveData<Pair<Int, Int>>()
         var pendingPwdOp: Int = MeshViewModel.PWD_OP_NONE
         var pendingPwdAddress: Int = -1
         var pendingPwdTimeout: Runnable? = null
@@ -325,6 +328,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                                 when (vendorOp) {
                                     OP_DEV_INFO_STATUS -> parseDeviceInfoStatus(src, payload)
                                     OP_PWD_STATUS -> parsePasswordStatus(src, payload)
+                                    OP_WORK_MODE_STATUS -> parseWorkModeStatus(src, payload)
                                 }
                             }
                         }
@@ -514,6 +518,10 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
                         OP_PWD_STATUS -> {
                             // [rc(1B), is_set(1B)]
                             parsePasswordStatus(src, data)
+                        }
+                        OP_WORK_MODE_STATUS -> {
+                            // [mode(1B)]
+                            parseWorkModeStatus(src, data)
                         }
                         else -> {
                             Log.w("MeshApp", "未处理的 Vendor OpCode: 0x${meshMessage.opCode.toString(16)}")
@@ -3652,6 +3660,7 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     fun getPasswordStatus(): MutableLiveData<Pair<Int, Int>> = MeshState.passwordStatusUpdates
     fun getPasswordOpResult(): MutableLiveData<Event<Triple<Int, Int, Int>>> = MeshState.passwordOpResult
     fun getFirmwareVersionUpdates(): MutableLiveData<Pair<Int, String>> = MeshState.firmwareVersionUpdates
+    fun getWorkMode(): MutableLiveData<Pair<Int, Int>> = MeshState.workModeUpdates
     fun isControlOnly(): Boolean = MeshState.isControlOnly
 
     /**
@@ -3778,6 +3787,62 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
             Log.d("MeshApp", "查询固件版本已发送: addr=0x${address.toString(16)}")
         } catch (e: Exception) {
             Log.e("MeshApp", "查询固件版本失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 读取工作模式（设备信息厂商模型 0x0003）
+     * 结果通过 workModeUpdates 返回
+     */
+    fun readWorkMode(address: Int) {
+        try {
+            val network = MeshState.meshNetWork ?: run {
+                Log.w("MeshApp", "读取工作模式失败：网络未加载")
+                return
+            }
+            val appKey = network.appKeys.firstOrNull() ?: run {
+                Log.w("MeshApp", "读取工作模式失败：未找到 App Key")
+                return
+            }
+            val msg = VendorModelMessageUnacked(appKey, DEVINFO_MODEL_ID, DEVINFO_CID, OP_WORK_MODE_GET, null)
+            MeshState.meshManagerApi.createMeshPdu(address, msg)
+            Log.d("MeshApp", "读取工作模式已发送: addr=0x${address.toString(16)}")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "读取工作模式失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 设置工作模式（雷达/定时/光敏互斥）
+     * @param mode 0=关闭, 1=雷达, 2=定时, 3=光敏
+     */
+    fun sendWorkMode(address: Int, mode: Int) {
+        try {
+            val network = MeshState.meshNetWork ?: run {
+                Log.w("MeshApp", "设置工作模式失败：网络未加载")
+                return
+            }
+            val appKey = network.appKeys.firstOrNull() ?: run {
+                Log.w("MeshApp", "设置工作模式失败：未找到 App Key")
+                return
+            }
+            val m = mode.coerceIn(WORK_MODE_OFF, WORK_MODE_AUTO_LIGHT)
+            val msg = VendorModelMessageUnacked(
+                appKey, DEVINFO_MODEL_ID, DEVINFO_CID,
+                OP_WORK_MODE_SET, byteArrayOf(m.toByte())
+            )
+            MeshState.meshManagerApi.createMeshPdu(address, msg)
+            val label = when (m) {
+                WORK_MODE_RADAR -> "雷达"
+                WORK_MODE_TIMER -> "定时"
+                WORK_MODE_AUTO_LIGHT -> "光敏"
+                else -> "关闭"
+            }
+            Log.d("MeshApp", "设置工作模式: mode=$m($label) to 0x${address.toString(16)}")
+            MeshState.statusText.postValue("工作模式: $label")
+        } catch (e: Exception) {
+            Log.e("MeshApp", "设置工作模式失败: ${e.message}")
+            MeshState.statusText.postValue("设置工作模式失败: ${e.message}")
         }
     }
 
@@ -3941,6 +4006,21 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /**
+     * 解析工作模式状态回包： [mode(1B)]
+     * mode: 0=关闭, 1=雷达, 2=定时, 3=光敏
+     */
+    private fun parseWorkModeStatus(src: Int, data: ByteArray?) {
+        if (data == null || data.isEmpty()) {
+            Log.w("MeshApp", "工作模式回包长度异常")
+            return
+        }
+        var mode = data[0].toInt() and 0xFF
+        if (mode > WORK_MODE_AUTO_LIGHT) mode = WORK_MODE_OFF
+        Log.d("MeshApp", "工作模式: mode=$mode (src=0x${src.toString(16)})")
+        MeshState.workModeUpdates.postValue(Pair(src, mode))
+    }
+
+    /**
      * 收到设备消息时标记设备为在线
      */
     private fun markDeviceOnline(src: Int) {
@@ -4032,6 +4112,17 @@ class MeshViewModel(application: Application): AndroidViewModel(application) {
         const val OP_PWD_SET = 0x11
         const val OP_PWD_RESET = 0x12
         const val OP_PWD_STATUS = 0x13
+
+        // 工作模式（同一模型 0x0003）：[mode(1B)]
+        const val OP_WORK_MODE_GET = 0x20
+        const val OP_WORK_MODE_SET = 0x21
+        const val OP_WORK_MODE_STATUS = 0x22
+
+        // 工作模式取值（与固件 work_mode_t 一致）
+        const val WORK_MODE_OFF = 0
+        const val WORK_MODE_RADAR = 1
+        const val WORK_MODE_TIMER = 2
+        const val WORK_MODE_AUTO_LIGHT = 3
 
         // 设备信息（软件版本）：[type(2B LE), major, minor, patch, build]
         // 注意 0x01/0x02 与雷达模型的 GET/STATUS 相同，接收时必须先用

@@ -475,6 +475,9 @@ class StreetlightModeActivity : ComponentActivity() {
             tasks.forEach { task ->
                 viewModel.setSchedulerTask(deviceAddress, task)
             }
+            // 三种工作模式互斥：下发定时曲线时同步选中"定时"模式，
+            // 否则任务已写入设备也不会执行
+            viewModel.sendWorkMode(deviceAddress, MeshViewModel.WORK_MODE_TIMER)
         }
 
         persistProfile()
