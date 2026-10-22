@@ -1106,28 +1106,25 @@ class DeviceDetailActivity : ComponentActivity() {
     }
 
     /**
-     * 同步三个模式开关的显示状态（不发送任何 Mesh 命令）。
-     * 打开一个模式时，另外两个开关会在这里被自动关闭。
+     * 同步两个基础模式开关的显示状态（不发送任何 Mesh 命令）。
+     * 定时和光敏互斥；雷达是独立叠加开关，这里不动它。
      */
     private fun syncModeSwitches(mode: Int) {
-        val m = mode.coerceIn(0, 3)
-        val radarOn = (m == MeshViewModel.WORK_MODE_RADAR)
+        // 旧的 1（雷达模式）归一化为“基础关闭”，雷达由独立开关表示
+        var m = mode.coerceIn(0, 3)
+        if (m == MeshViewModel.WORK_MODE_RADAR) m = MeshViewModel.WORK_MODE_OFF
         val timerOn = (m == MeshViewModel.WORK_MODE_TIMER)
         val lightOn = (m == MeshViewModel.WORK_MODE_AUTO_LIGHT)
 
         deviceWorkMode = m
         val changed = device.workMode != m ||
-                device.radarEnabled != radarOn ||
                 device.autoLightEnabled != lightOn
         device.workMode = m
-        device.radarEnabled = radarOn
         device.autoLightEnabled = lightOn
         if (changed) deviceRepository.updateDevice(device)
 
         syncingWorkModeUi = true
         try {
-            findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchRadarEnable)?.isChecked =
-                radarOn
             findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchScheduleEnable)?.isChecked =
                 timerOn
             findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchAutoLight)?.isChecked =
@@ -1138,11 +1135,12 @@ class DeviceDetailActivity : ComponentActivity() {
     }
 
     /**
-     * 用户主动切换模式后的统一处理：
+     * 用户主动切换基础模式后的统一处理：
      * 1. 记录操作时间，此后一段时间内丢弃迟到的旧状态回包
-     * 2. 本地三个开关立即联动
-     * 3. 显式关闭另外两个模式的设备侧使能（双保险，兼容不支持工作模式的旧固件）
-     * 4. 800ms 后回读工作模式，以设备实际状态再校正一次界面
+     * 2. 本地定时/光敏开关立即联动
+     * 3. 切到定时时显式关闭光敏使能（双保险，兼容旧固件）
+     * 4. 1.8s 后回读基础模式，以设备实际状态再校正一次界面
+     * 雷达是独立叠加层，不在这里处理。
      */
     private fun applyUserMode(mode: Int) {
         lastModeActionAt = SystemClock.elapsedRealtime()
@@ -1158,18 +1156,11 @@ class DeviceDetailActivity : ComponentActivity() {
     }
 
     /**
-     * 显式关闭除 mode 以外两个模式的设备侧开关。
-     * 设备固件本身也做了互斥，这里是双保险：
-     * 即使设备跑的是没有工作模式的旧固件，也不会出现雷达和光敏同时生效。
+     * 基础模式互斥的显式兜底：切到“定时”时关闭光敏使能。
+     * 雷达是独立叠加层，不受基础模式影响，所以这里不碰雷达。
      */
     private fun sendOtherModesOff(mode: Int) {
-        if (mode == MeshViewModel.WORK_MODE_OFF) return
-
-        if (mode != MeshViewModel.WORK_MODE_RADAR) {
-            Log.d("DeviceDetail", "模式互斥: 关闭雷达使能")
-            viewModel.sendRadarEnable(device.address + 4, 0)
-        }
-        if (mode != MeshViewModel.WORK_MODE_AUTO_LIGHT) {
+        if (mode == MeshViewModel.WORK_MODE_TIMER) {
             // 只关使能，不改阈值，避免覆盖设备里已保存的光敏阈值
             Log.d("DeviceDetail", "模式互斥: 关闭光敏使能")
             viewModel.sendAutoLightDisable(device.address + 1)
@@ -1697,19 +1688,14 @@ class DeviceDetailActivity : ComponentActivity() {
             }
         })
 
-        // 启用开关
+        // 启用开关（独立叠加层：不改变定时/光敏基础模式）
         switchEnable.setOnCheckedChangeListener { _, isChecked ->
             if (syncingWorkModeUi) return@setOnCheckedChangeListener
             if (viewModel.isConnected.value == true) {
                 viewModel.sendRadarEnable(elem4Addr, if (isChecked) 1 else 0)
                 device.radarEnabled = isChecked
                 deviceRepository.updateDevice(device)
-                // 打开雷达 = 选中雷达模式；关闭时若当前就是雷达模式则回到"关闭"
-                if (isChecked) {
-                    applyUserMode(MeshViewModel.WORK_MODE_RADAR)
-                } else if (deviceWorkMode == MeshViewModel.WORK_MODE_RADAR) {
-                    applyUserMode(MeshViewModel.WORK_MODE_OFF)
-                }
+                Log.d("DeviceDetail", "雷达叠加开关: $isChecked (基础模式=$deviceWorkMode)")
             }
         }
 
@@ -1807,12 +1793,6 @@ class DeviceDetailActivity : ComponentActivity() {
                 syncingWorkModeUi = prevSyncing
                 device.radarEnabled = enabled == 1
                 deviceRepository.updateDevice(device)
-                // 设备侧雷达使能就是工作模式镜像：同步另外两个模式开关
-                if (enabled == 1 && deviceWorkMode != MeshViewModel.WORK_MODE_RADAR) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_RADAR)
-                } else if (enabled == 0 && deviceWorkMode == MeshViewModel.WORK_MODE_RADAR) {
-                    syncModeSwitches(MeshViewModel.WORK_MODE_OFF)
-                }
             }
         }
 

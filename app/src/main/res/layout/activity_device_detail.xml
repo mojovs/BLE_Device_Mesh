@@ -927,7 +927,7 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="打开右上角开关后，定时任务/路灯曲线才会执行；与雷达、光敏互斥。"
+                            android:text="打开右上角开关后，定时任务/路灯曲线才会执行；与光敏模式互斥，雷达可同时开启。"
                             android:textSize="12sp"
                             android:textColor="#9CA3AF"
                             android:layout_marginBottom="10dp" />
@@ -1512,7 +1512,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="HLK-LD1040 人体检测，记录时间、蜂鸣提示、夜晚自动亮灯"
+                            android:text="HLK-LD1040 人体检测，记录时间、蜂鸣提示、夜晚自动亮灯。可叠加在定时/光敏上，检测到人临时提亮，超时后恢复基础亮度。"
                             android:textSize="13sp"
                             android:textColor="#9CA3AF"
                             android:layout_marginBottom="12dp" />
